@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Log in or sign up | Rentora</title><link rel="stylesheet" href="css/styles.css">
+</head>
+<body class="auth-page">
+<header class="site-header simple-header"><a class="logo" href="index.html">rentora<span>.</span></a><a href="index.html" class="text-link">← Back to Rentora</a></header>
+<main class="auth-shell">
+  <div class="auth-card">
+    <p class="eyebrow" id="authEyebrow">Welcome back</p>
+    <h1 id="authTitle">Log in to Rentora</h1>
+    <p class="muted" id="authSubtitle">Rent smarter. Humanity has enough stuff already.</p>
+
+    <button type="button" id="googleSignIn" class="secondary-button full google-button">
+      <span class="google-g">G</span> Continue with Google
+    </button>
+    <div class="auth-divider"><span>or</span></div>
+
+    <form id="authForm">
+      <label id="nameWrap" class="hidden">Name<input id="name" type="text" autocomplete="name"></label>
+      <label>Email<input id="email" type="email" autocomplete="email" required></label>
+      <label>Password<input id="password" type="password" minlength="6" autocomplete="current-password" required></label>
+      <button class="primary-button full" type="submit" id="authSubmit">Log in</button>
+    </form>
+    <p id="authError" class="auth-error hidden"></p>
+    <p class="auth-switch"><span id="switchText">Don't have an account?</span> <button type="button" id="switchMode">Sign up</button></p>
+    <p class="demo-note">Real Firebase Auth is connected. Accounts and sessions are live.</p>
+  </div>
+</main>
+<script type="module" src="js/firebase.js"></script>
+<script type="module" src="js/auth.js"></script>
+</body>
+</html>

@@ -1,0 +1,117 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function onlyFieldsChanged(fields) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(fields);
+    }
+
+    // ---------- users/{uid} ----------
+    match /users/{userId} {
+      allow read: if true;
+
+      allow create: if isOwner(userId)
+                    && request.resource.data.email is string
+                    && request.resource.data.displayName is string
+                    && request.resource.data.displayName.size() > 0
+                    && request.resource.data.displayName.size() <= 80
+                    && request.resource.data.bio is string
+                    && request.resource.data.bio.size() <= 500;
+
+      // Email and createdAt are set once at signup and never editable afterward.
+      allow update: if isOwner(userId)
+                    && request.resource.data.email == resource.data.email
+                    && request.resource.data.createdAt == resource.data.createdAt
+                    && request.resource.data.displayName.size() <= 80
+                    && request.resource.data.bio.size() <= 500;
+
+      allow delete: if false;
+    }
+
+    // ---------- listings/{listingId} ----------
+    match /listings/{listingId} {
+      allow read: if true;
+
+      allow create: if isSignedIn()
+                    && request.resource.data.ownerId == request.auth.uid
+                    && request.resource.data.title is string
+                    && request.resource.data.title.size() > 0
+                    && request.resource.data.title.size() <= 120
+                    && request.resource.data.description is string
+                    && request.resource.data.description.size() <= 2000
+                    && request.resource.data.category is string
+                    && request.resource.data.pricePerDay is number
+                    && request.resource.data.pricePerDay > 0
+                    && request.resource.data.pricePerDay < 100000
+                    && request.resource.data.available is bool
+                    && request.resource.data.rating is number
+                    && request.resource.data.rating >= 0
+                    && request.resource.data.rating <= 5;
+
+      // Owner can edit their listing, but can't reassign it to someone else
+      // or forge a rating/review count for themselves.
+      allow update: if isSignedIn()
+                    && resource.data.ownerId == request.auth.uid
+                    && request.resource.data.ownerId == resource.data.ownerId
+                    && request.resource.data.rating == resource.data.rating
+                    && request.resource.data.reviewCount == resource.data.reviewCount
+                    && request.resource.data.pricePerDay is number
+                    && request.resource.data.pricePerDay > 0;
+
+      allow delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+    }
+
+    // ---------- rentalRequests/{requestId} ----------
+    match /rentalRequests/{requestId} {
+      allow create: if isSignedIn()
+                    && request.resource.data.renterId == request.auth.uid
+                    && request.resource.data.ownerId != request.auth.uid
+                    && request.resource.data.status == "pending"
+                    && request.resource.data.startDate is string
+                    && request.resource.data.endDate is string
+                    && request.resource.data.totalPrice is number
+                    && request.resource.data.totalPrice > 0;
+
+      allow read: if isSignedIn()
+                  && (resource.data.renterId == request.auth.uid
+                      || resource.data.ownerId == request.auth.uid);
+
+      // Owner may accept/decline/complete; renter may only cancel while pending.
+      // Either way, only the status (+ updatedAt) field can change.
+      allow update: if isSignedIn() && onlyFieldsChanged(["status", "updatedAt"]) && (
+                      (resource.data.ownerId == request.auth.uid
+                        && request.resource.data.status in ["accepted", "declined", "completed"])
+                      ||
+                      (resource.data.renterId == request.auth.uid
+                        && resource.data.status == "pending"
+                        && request.resource.data.status == "cancelled")
+                    );
+
+      allow delete: if false;
+    }
+
+    // ---------- reviews/{reviewId} ----------
+    match /reviews/{reviewId} {
+      allow read: if true;
+
+      allow create: if isSignedIn()
+                    && request.resource.data.authorId == request.auth.uid
+                    && request.resource.data.rating is number
+                    && request.resource.data.rating >= 1
+                    && request.resource.data.rating <= 5
+                    && request.resource.data.text is string
+                    && request.resource.data.text.size() <= 1000;
+
+      allow update, delete: if isSignedIn() && resource.data.authorId == request.auth.uid;
+    }
+  }
+}

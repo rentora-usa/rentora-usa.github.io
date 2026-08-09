@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Browse | Rentora</title><link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<header class="site-header">
+  <a class="logo" href="index.html">rentora<span>.</span></a>
+  <nav class="main-nav"><a class="active" href="search.html">Explore</a><a href="about.html">About</a></nav>
+  <div class="header-actions"><a href="login.html" class="host-link">List an item</a><a href="login.html" class="avatar-button">♙</a></div>
+</header>
+<main class="page-shell search-page">
+  <div class="search-top"><div><p class="eyebrow">Marketplace</p><h1>Find something to rent</h1></div></div>
+  <form class="search-bar search-bar-wide" id="searchForm">
+    <div class="search-field"><span>⌕</span><input id="query" type="search" placeholder="Search tools, cameras, bikes..." /></div>
+    <div class="search-field"><span>⌖</span><input id="location" type="text" placeholder="Location" /></div>
+    <button class="primary-button" type="submit">Search</button>
+  </form>
+
+  <div class="browse-layout">
+    <aside class="filters">
+      <div class="filter-heading"><h3>Filters</h3><button id="clearFilters" class="text-button">Clear</button></div>
+      <label>Category<select id="categoryFilter"><option value="">All categories</option></select></label>
+      <label>Subcategory<select id="subcategoryFilter"><option value="">All subcategories</option></select></label>
+      <label>Max daily price<input id="priceFilter" type="number" min="0" placeholder="$100"></label>
+      <label>Sort by<select id="sortFilter"><option value="featured">Featured</option><option value="priceLow">Price: low to high</option><option value="priceHigh">Price: high to low</option><option value="rating">Rating</option></select></label>
+      <div class="filter-note">Availability dates and exact location can be connected further later.</div>
+    </aside>
+    <section class="results">
+      <div class="results-meta"><span id="resultCount">0 items</span><span id="activeSearch"></span></div>
+      <div class="listing-grid" id="resultsGrid"></div>
+      <div id="emptyState" class="empty-state hidden"><h2>No matches</h2><p>Try removing a filter or searching for something broader.</p></div>
+    </section>
+  </div>
+</main>
+<script type="module" src="js/firebase.js"></script>
+<script type="module" src="js/header-auth.js"></script>
+<script type="module" src="js/search.js"></script>
+</body>
+</html>

@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>List an item | Rentora</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body class="auth-page">
+<header class="site-header simple-header">
+  <a class="logo" href="index.html">rentora<span>.</span></a>
+  <a href="index.html" class="text-link">← Back to Rentora</a>
+</header>
+<main class="auth-shell">
+  <div class="auth-card">
+    <p class="eyebrow">Host on Rentora</p>
+    <h1>List an item</h1>
+    <p class="muted">Set a price, describe it honestly, and Rentora handles the browsing experience.</p>
+    <form id="listingForm">
+      <label>Title<input id="title" type="text" required maxlength="120" placeholder="Sony Mirrorless Camera"></label>
+      <label>Description<textarea id="description" rows="4" required maxlength="2000" placeholder="What it's good for, what's included, condition..."></textarea></label>
+      <label>Category<select id="category" required></select></label>
+      <label>Subcategory<select id="subcategory"></select></label>
+      <label>Price per day (USD)<input id="price" type="number" min="1" step="1" required></label>
+      <label>Location<input id="location" type="text" required placeholder="East Greenwich, RI"></label>
+      <label>Photo URLs (comma-separated)<input id="imageUrls" type="text" placeholder="https://example.com/photo.jpg"></label>
+      <button class="primary-button full" type="submit" id="listingSubmit">Publish listing</button>
+    </form>
+    <p id="listingError" class="auth-error hidden"></p>
+    <p class="demo-note">Photos are linked by URL for now. Uploading directly to Firebase Storage is a natural next step.</p>
+  </div>
+</main>
+<script type="module" src="js/firebase.js"></script>
+<script type="module" src="js/header-auth.js"></script>
+<script type="module" src="js/create-listing.js"></script>
+</body>
+</html>
