@@ -5,9 +5,12 @@
 Rentora is a clean, Airbnb-inspired peer-to-peer rental marketplace. The frontend now runs on a **live Firebase backend**: real email/password + Google authentication, and listings/rental requests read from and written to Firestore instead of a hardcoded demo array.
 
 - Responsive homepage, search, and product pages backed by Firestore
-- Real Firebase Authentication (email/password **and** Google sign-in)
-- "List an item" flow that writes real `listings` documents
+- Real Firebase Authentication (email/password **and** Google sign-in), with an account dropdown that updates in place instead of full-page reloads
+- "List an item" flow (also doubles as the edit flow) that writes real `listings` documents
 - Rental request flow that writes real `rentalRequests` documents
+- **Dashboard** — manage your own listings (edit, hide, delete) and track rental requests you've sent or received (accept/decline/cancel)
+- **Settings** — edit your public profile, see account info, sign out
+- A 404 page for GitHub Pages
 - Firestore security rules with field validation and status-flow enforcement
 - GitHub Pages-friendly static frontend (no build step — plain ES modules)
 
@@ -48,6 +51,13 @@ If you ever need to point this frontend at a different Firebase project, replace
 3. Go to **Authentication → Settings → Authorized domains** and make sure both `localhost` (for local dev) and your GitHub Pages domain (e.g. `yourname.github.io`) are listed. `signInWithPopup` will fail with `auth/unauthorized-domain` on any domain not in this list.
 
 `js/auth.js` already implements both flows via `signInWithEmailAndPassword` / `createUserWithEmailAndPassword` and `signInWithPopup(auth, googleProvider)`. Either path creates a matching `users/{uid}` profile document the first time someone signs in.
+
+### Sign-in/out UX
+
+- The header avatar is now an account dropdown (`js/header-auth.js`) — click it to reach Dashboard, Settings, or Log out, without leaving the page you're on.
+- Logging out on a public page (home, search, a listing) just updates the header in place; you keep browsing. Logging out from a page that requires an account (Dashboard, Settings, List an item) sends you back to the homepage.
+- Clicking "List an item" or the avatar while signed out takes you to `login.html?next=<page>` — after logging in you land back where you meant to go, not always the homepage.
+- Visiting `login.html` while already signed in redirects you straight through instead of showing the form again.
 
 ---
 
@@ -109,21 +119,33 @@ js/
   firebase.js           Initializes app/auth/db/storage — everything else imports from here
   categories.js         Static category/subcategory taxonomy
   auth.js                Real email/password + Google sign-in (login.html)
-  header-auth.js         Reflects signed-in state in the header, on every page
-  listings.js             Firestore reads/writes for listings
+  header-auth.js         Account dropdown, fluid sign-in/out, guards protected pages
+  listings.js             Firestore reads/writes for listings (incl. owner queries, edit, delete)
+  rentals.js               Firestore reads/writes for rentalRequests
   app.js                  Homepage: featured listings from Firestore
   search.js               Search/browse page: Firestore-backed filtering
   product.js               Product page + rental request creation
-  create-listing.js       "List an item" form → writes to Firestore
+  create-listing.js       "List an item" form — also handles editing via ?id=
+  settings.js               Settings page: profile editing, account info, sign out
+  dashboard.js              Dashboard page: manage listings + rental requests
+
+Pages: index.html, about.html, search.html, product.html, login.html,
+       create-listing.html, settings.html, dashboard.html, 404.html
 ```
+
+### Pages added this round, and why
+
+- **Dashboard** (`dashboard.html`) — once listings live in Firestore instead of a mock array, there needs to be somewhere to see what you've published and manage rental requests. It has three tabs: your listings (edit/hide/delete), rentals you've requested (cancel while pending), and requests on your own listings (accept/decline).
+- **Settings** (`settings.html`) — edits the `users/{uid}` profile doc (display name, location, bio, photo) and shows read-only account info (email, sign-in method, member-since date).
+- **404** (`404.html`) — GitHub Pages serves this automatically for unmatched paths once it's in the repo root.
 
 ---
 
 ## 7. What to build next
 
-1. **Direct photo uploads** to Firebase Storage (see §5) instead of pasted URLs.
-2. **Messaging** — renter ↔ owner chat via Firestore real-time listeners (`onSnapshot`).
-3. **Reviews UI** — a form on completed rentals that writes to `reviews` and recomputes the listing's `rating`/`reviewCount` (best done via a Cloud Function so clients can't forge it).
+1. **Direct photo uploads** to Firebase Storage (see §5) instead of pasted URLs — this would touch both `create-listing.html`/`create-listing.js` and a profile-photo uploader in `settings.html`.
+2. **Messaging** — renter ↔ owner chat via Firestore real-time listeners (`onSnapshot`). The dashboard's request rows are a natural place to add a "Message owner/renter" link once this exists.
+3. **Reviews UI** — a form on completed rentals that writes to `reviews` and recomputes the listing's `rating`/`reviewCount` (best done via a Cloud Function so clients can't forge it). The dashboard's "Requests I've received" tab already has a `completed` state to hang this off of.
 4. **Payments** — Stripe Connect for marketplace payouts. Never process card numbers directly in the frontend.
 5. **Trust & safety** — report/block flows, identity checks where appropriate, admin moderation.
 6. **Server-side logic** — a small set of Cloud Functions (or another trusted backend) for anything that shouldn't be client-writable directly: aggregating ratings, enforcing rental-date conflicts, sending notifications on status changes.
@@ -137,9 +159,11 @@ Never put Firebase **Admin SDK** credentials or a service-account JSON file in t
 ## Project status
 
 - Homepage, search, filters, categories, product pages: working, Firestore-backed
-- Auth: real Firebase Auth, email/password + Google
-- Listing creation: working, writes to Firestore
+- Auth: real Firebase Auth, email/password + Google, fluid dropdown sign-in/out
+- Listing creation & editing: working, writes to Firestore
 - Rental requests: working, writes to Firestore
+- Dashboard: working — manage listings, track requests sent/received
+- Settings: working — edit profile, view account info, sign out
 - Firestore security rules: tightened (see §4)
 - Photo uploads to Storage: not yet — URLs only
 - Reviews UI, messaging, payments: not yet included

@@ -3,7 +3,8 @@ import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signInWithPopup,
-  updateProfile
+  updateProfile,
+  onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
 import {
   doc, getDoc, setDoc, serverTimestamp
@@ -21,6 +22,16 @@ const switchText = document.getElementById("switchText");
 const switchMode = document.getElementById("switchMode");
 const googleBtn = document.getElementById("googleSignIn");
 const errorBox = document.getElementById("authError");
+
+// Wherever the person was trying to go before login.html interrupted them.
+// header-auth.js sets this on every "you need to be logged in" redirect.
+const nextUrl = new URLSearchParams(location.search).get("next") || "index.html";
+
+// Already signed in and landed on the login page anyway (e.g. via back
+// button)? Send them straight on rather than showing the form again.
+onAuthStateChanged(auth, (user) => {
+  if (user) location.href = nextUrl;
+});
 
 switchMode.addEventListener("click", () => {
   signup = !signup;
@@ -46,9 +57,17 @@ function showError(message) {
   errorBox.classList.remove("hidden");
 }
 
-// Creates the users/{uid} profile doc the first time someone signs in,
-// whether that's via email/password or Google. Firestore creates the
-// "users" collection implicitly on this first write.
+function setLoading(btn, isLoading, busyText) {
+  if (isLoading) {
+    btn.dataset.label = btn.textContent;
+    btn.textContent = busyText;
+    btn.disabled = true;
+  } else {
+    btn.textContent = btn.dataset.label || btn.textContent;
+    btn.disabled = false;
+  }
+}
+
 async function ensureUserDoc(user, extra = {}) {
   const ref = doc(db, "users", user.uid);
   const snap = await getDoc(ref);
@@ -70,7 +89,7 @@ form.addEventListener("submit", async (e) => {
   const email = document.getElementById("email").value.trim();
   const password = document.getElementById("password").value;
   const name = document.getElementById("name")?.value.trim();
-  submitBtn.disabled = true;
+  setLoading(submitBtn, true, signup ? "Creating account…" : "Logging in…");
   try {
     if (signup) {
       const cred = await createUserWithEmailAndPassword(auth, email, password);
@@ -79,25 +98,23 @@ form.addEventListener("submit", async (e) => {
     } else {
       await signInWithEmailAndPassword(auth, email, password);
     }
-    location.href = "index.html";
+    location.href = nextUrl;
   } catch (err) {
     showError(friendlyAuthError(err));
-  } finally {
-    submitBtn.disabled = false;
+    setLoading(submitBtn, false);
   }
 });
 
 googleBtn?.addEventListener("click", async () => {
   clearError();
-  googleBtn.disabled = true;
+  setLoading(googleBtn, true, "Connecting to Google…");
   try {
     const cred = await signInWithPopup(auth, googleProvider);
     await ensureUserDoc(cred.user);
-    location.href = "index.html";
+    location.href = nextUrl;
   } catch (err) {
     showError(friendlyAuthError(err));
-  } finally {
-    googleBtn.disabled = false;
+    setLoading(googleBtn, false);
   }
 });
 

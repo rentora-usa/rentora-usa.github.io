@@ -1,24 +1,42 @@
 import { RENTORA_CATEGORIES } from "./categories.js";
-import { createListing } from "./listings.js";
+import { createListing, updateListing, fetchListingById } from "./listings.js";
 import { auth } from "./firebase.js";
 import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
 
 const catSelect = document.getElementById("category");
 const subSelect = document.getElementById("subcategory");
+const editId = new URLSearchParams(location.search).get("id");
 
 RENTORA_CATEGORIES.forEach(c => catSelect.add(new Option(c.name, c.name)));
-function updateSubs() {
+function updateSubs(selected) {
   subSelect.innerHTML = "";
   const c = RENTORA_CATEGORIES.find(x => x.name === catSelect.value);
   (c?.subs || []).forEach(s => subSelect.add(new Option(s, s)));
+  if (selected) subSelect.value = selected;
 }
-catSelect.addEventListener("change", updateSubs);
+catSelect.addEventListener("change", () => updateSubs());
 updateSubs();
 
-// Bounce signed-out visitors to login rather than letting them hit a
-// permission-denied error from Firestore rules.
+async function loadForEdit(user) {
+  const x = await fetchListingById(editId);
+  if (!x) { document.getElementById("listingError").textContent = "That listing no longer exists."; document.getElementById("listingError").classList.remove("hidden"); return; }
+  if (x.ownerId !== user.uid) { location.href = "dashboard.html"; return; }
+
+  document.getElementById("pageTitle").textContent = "Edit listing";
+  document.getElementById("pageSubtitle").textContent = "Update the details renters see.";
+  document.getElementById("listingSubmit").textContent = "Save changes";
+  document.getElementById("title").value = x.title || "";
+  document.getElementById("description").value = x.description || "";
+  catSelect.value = x.category || "";
+  updateSubs(x.subcategory);
+  document.getElementById("price").value = x.pricePerDay || "";
+  document.getElementById("location").value = x.locationText || "";
+  document.getElementById("imageUrls").value = (x.imageUrls || []).join(", ");
+}
+
 onAuthStateChanged(auth, (user) => {
-  if (!user) location.href = "login.html";
+  if (!user) return; // header-auth.js already redirects signed-out visitors
+  if (editId) loadForEdit(user);
 });
 
 document.getElementById("listingForm").addEventListener("submit", async (e) => {
@@ -31,20 +49,27 @@ document.getElementById("listingForm").addEventListener("submit", async (e) => {
   const imageUrls = document.getElementById("imageUrls").value
     .split(",").map(s => s.trim()).filter(Boolean);
 
+  const data = {
+    title: document.getElementById("title").value.trim(),
+    description: document.getElementById("description").value.trim(),
+    category: catSelect.value,
+    subcategory: subSelect.value,
+    pricePerDay: Number(document.getElementById("price").value),
+    locationText: document.getElementById("location").value.trim(),
+    imageUrls
+  };
+
   try {
-    const ref = await createListing({
-      title: document.getElementById("title").value.trim(),
-      description: document.getElementById("description").value.trim(),
-      category: catSelect.value,
-      subcategory: subSelect.value,
-      pricePerDay: Number(document.getElementById("price").value),
-      locationText: document.getElementById("location").value.trim(),
-      imageUrls
-    });
-    location.href = `product.html?id=${ref.id}`;
+    if (editId) {
+      await updateListing(editId, data);
+      location.href = `product.html?id=${editId}`;
+    } else {
+      const ref = await createListing(data);
+      location.href = `product.html?id=${ref.id}`;
+    }
   } catch (err) {
     console.error(err);
-    errorBox.textContent = err.message || "Couldn't create the listing. Try again.";
+    errorBox.textContent = err.message || "Couldn't save the listing. Try again.";
     errorBox.classList.remove("hidden");
     submitBtn.disabled = false;
   }
