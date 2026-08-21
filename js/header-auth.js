@@ -1,10 +1,11 @@
-// Loaded on every page. Drives the account dropdown in the header, keeps
-// sign-in/out fluid (no full reloads on public pages), and redirects away
-// from pages that require an account.
+// Loaded on every page. Drives the account dropdown in the header, the
+// unread-messages badge, fluid sign-in/out, and guards pages that require
+// an account.
 import { auth } from "./firebase.js";
 import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
+import { subscribeConversations, isUnread } from "./messages.js";
 
-const PROTECTED_PAGES = ["settings.html", "dashboard.html", "create-listing.html"];
+const PROTECTED_PAGES = ["settings.html", "dashboard.html", "create-listing.html", "messages.html"];
 
 function currentPage() {
   return location.pathname.split("/").pop() || "index.html";
@@ -34,12 +35,17 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeDropdown();
 });
 
+let unsubConversations = null;
+
 onAuthStateChanged(auth, (user) => {
   document.body.classList.remove("auth-pending");
 
   const avatarBtn = document.getElementById("avatarButton");
   const dropdown = document.getElementById("accountDropdown");
   const hostLink = document.querySelector(".host-link");
+
+  unsubConversations?.();
+  unsubConversations = null;
 
   if (avatarBtn) {
     if (user) {
@@ -55,6 +61,8 @@ onAuthStateChanged(auth, (user) => {
             <div class="dropdown-email">${escapeHtml(user.email || "")}</div>
           </div>
           <a href="dashboard.html">My listings &amp; rentals</a>
+          <a href="messages.html">Messages<span class="nav-badge hidden" id="dropdownMsgBadge">0</span></a>
+          <a href="profile.html?uid=${user.uid}">View my profile</a>
           <a href="settings.html">Settings</a>
           <button type="button" id="dropdownLogout" class="logout-btn">Log out</button>
         `;
@@ -67,18 +75,35 @@ onAuthStateChanged(auth, (user) => {
           if (PROTECTED_PAGES.includes(currentPage())) location.href = "index.html";
         });
       }
+
+      // Live unread-messages count, reflected as a badge on the dropdown
+      // entry and on the "Messages" nav link if the page has one.
+      unsubConversations = subscribeConversations(user.uid, (conversations) => {
+        const unreadCount = conversations.filter(c => isUnread(c, user.uid)).length;
+        const navBadge = document.getElementById("messagesBadge");
+        const dropdownBadge = document.getElementById("dropdownMsgBadge");
+        [navBadge, dropdownBadge].forEach(el => {
+          if (!el) return;
+          el.textContent = unreadCount > 9 ? "9+" : String(unreadCount);
+          el.classList.toggle("hidden", unreadCount === 0);
+        });
+      });
     } else {
       avatarBtn.textContent = "♙";
       avatarBtn.setAttribute("aria-label", "Log in");
       avatarBtn.onclick = (e) => { e.preventDefault(); location.href = loginUrl(); };
       if (dropdown) dropdown.innerHTML = "";
       closeDropdown();
+      document.getElementById("messagesBadge")?.classList.add("hidden");
     }
   }
 
   if (hostLink) {
     hostLink.href = user ? "create-listing.html" : loginUrl();
   }
+
+  const messagesLink = document.getElementById("messagesNavLink");
+  if (messagesLink) messagesLink.classList.toggle("hidden", !user);
 
   if (!user && PROTECTED_PAGES.includes(currentPage())) {
     location.href = loginUrl();

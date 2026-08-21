@@ -1,4 +1,4 @@
-import { auth, googleProvider, db } from "./firebase.js";
+import { auth, googleProvider, appleProvider, db } from "./firebase.js";
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
@@ -21,6 +21,7 @@ const submitBtn = document.getElementById("authSubmit");
 const switchText = document.getElementById("switchText");
 const switchMode = document.getElementById("switchMode");
 const googleBtn = document.getElementById("googleSignIn");
+const appleBtn = document.getElementById("appleSignIn");
 const errorBox = document.getElementById("authError");
 
 // Wherever the person was trying to go before login.html interrupted them.
@@ -118,6 +119,19 @@ googleBtn?.addEventListener("click", async () => {
   }
 });
 
+appleBtn?.addEventListener("click", async () => {
+  clearError();
+  setLoading(appleBtn, true, "Connecting to Apple…");
+  try {
+    const cred = await signInWithPopup(auth, appleProvider);
+    await ensureUserDoc(cred.user);
+    location.href = nextUrl;
+  } catch (err) {
+    showError(friendlyAuthError(err));
+    setLoading(appleBtn, false);
+  }
+});
+
 function friendlyAuthError(err) {
   const map = {
     "auth/email-already-in-use": "That email already has an account. Try logging in instead.",
@@ -125,8 +139,9 @@ function friendlyAuthError(err) {
     "auth/wrong-password": "Incorrect email or password.",
     "auth/user-not-found": "No account found with that email.",
     "auth/weak-password": "Password should be at least 6 characters.",
-    "auth/popup-closed-by-user": "Google sign-in was closed before finishing.",
-    "auth/unauthorized-domain": "This domain isn't authorized for Google sign-in yet — add it under Authentication > Settings > Authorized domains in Firebase."
+    "auth/popup-closed-by-user": "That sign-in window was closed before finishing.",
+    "auth/unauthorized-domain": "This domain isn't authorized for popup sign-in yet — add it under Authentication > Settings > Authorized domains in Firebase.",
+    "auth/operation-not-allowed": "That sign-in method isn't enabled yet in the Firebase console."
   };
   return map[err.code] || `Something went wrong (${err.code || err.message}). Please try again.`;
 }

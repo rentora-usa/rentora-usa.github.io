@@ -16,8 +16,9 @@ onAuthStateChanged(auth, async (user) => {
   if (!user) return; // header-auth.js redirects signed-out visitors to login
 
   document.getElementById("accountEmail").textContent = user.email || "—";
+  const providerId = user.providerData[0]?.providerId;
   document.getElementById("accountProvider").textContent =
-    user.providerData[0]?.providerId === "google.com" ? "Google" : "Email & password";
+    providerId === "google.com" ? "Google" : providerId === "apple.com" ? "Apple" : "Email & password";
 
   const ref = doc(db, "users", user.uid);
   const snap = await getDoc(ref);
