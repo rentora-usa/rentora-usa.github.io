@@ -1,6 +1,6 @@
 import { auth, db } from "./firebase.js";
 import {
-  collection, doc, getDoc, setDoc, updateDoc, addDoc, getDocs,
+  collection, doc, setDoc, getDoc, updateDoc, addDoc,
   query, where, orderBy, onSnapshot, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 
@@ -11,6 +11,19 @@ function conversationId(listingId, renterId) {
   return `${listingId}_${renterId}`;
 }
 
+// IMPORTANT: this used to getDoc() the conversation first to check whether
+// it existed before deciding to create it. That doesn't work — the read
+// rule requires the requester to already be listed in `participants`, and
+// for a conversation that doesn't exist yet there's no resource to check
+// against, so Firestore denies the read outright. That was the actual bug
+// behind "the chat system doesn't work": starting a *new* conversation
+// threw permission-denied before it ever got the chance to create one.
+//
+// The fix: skip the existence check entirely and setDoc with merge:true.
+// Firestore evaluates that as a "create" when the doc is new and an
+// "update" when it isn't, and merge:true leaves lastMessage/lastMessageAt
+// untouched on repeat calls instead of resetting the thread every time
+// "Message owner" is clicked again.
 export async function startOrOpenConversation({ listingId, listingTitle, ownerId, renterId }) {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error("You must be logged in to message.");
@@ -19,20 +32,13 @@ export async function startOrOpenConversation({ listingId, listingTitle, ownerId
 
   const id = conversationId(listingId, actualRenterId);
   const ref = doc(db, "conversations", id);
-  const snap = await getDoc(ref);
-  if (!snap.exists()) {
-    await setDoc(ref, {
-      listingId,
-      listingTitle: listingTitle || "",
-      ownerId,
-      renterId: actualRenterId,
-      participants: [ownerId, actualRenterId],
-      lastMessage: "",
-      lastMessageAt: serverTimestamp(),
-      lastSenderId: "",
-      lastRead: {}
-    });
-  }
+  await setDoc(ref, {
+    listingId,
+    listingTitle: listingTitle || "",
+    ownerId,
+    renterId: actualRenterId,
+    participants: [ownerId, actualRenterId]
+  }, { merge: true });
   return id;
 }
 
@@ -45,12 +51,13 @@ export function subscribeConversations(uid, callback) {
     const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     items.sort((a, b) => (b.lastMessageAt?.toMillis?.() || 0) - (a.lastMessageAt?.toMillis?.() || 0));
     callback(items);
-  });
+  }, err => console.error("subscribeConversations", err));
 }
 
 export function subscribeMessages(convId, callback) {
   const q = query(collection(db, "conversations", convId, "messages"), orderBy("createdAt", "asc"));
-  return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+  return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+    err => console.error("subscribeMessages", err));
 }
 
 export async function fetchConversation(convId) {
@@ -83,8 +90,6 @@ export async function markConversationRead(convId, uid) {
   });
 }
 
-// Used by the header badge — a conversation counts as unread if its last
-// message wasn't sent by this person and arrived after they last opened it.
 export function isUnread(conversation, uid) {
   if (!conversation.lastMessageAt || conversation.lastSenderId === uid) return false;
   const lastRead = conversation.lastRead?.[uid];

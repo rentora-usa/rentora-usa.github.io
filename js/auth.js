@@ -24,12 +24,8 @@ const googleBtn = document.getElementById("googleSignIn");
 const appleBtn = document.getElementById("appleSignIn");
 const errorBox = document.getElementById("authError");
 
-// Wherever the person was trying to go before login.html interrupted them.
-// header-auth.js sets this on every "you need to be logged in" redirect.
 const nextUrl = new URLSearchParams(location.search).get("next") || "index.html";
 
-// Already signed in and landed on the login page anyway (e.g. via back
-// button)? Send them straight on rather than showing the form again.
 onAuthStateChanged(auth, (user) => {
   if (user) location.href = nextUrl;
 });

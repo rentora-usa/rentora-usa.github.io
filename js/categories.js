@@ -1,5 +1,3 @@
-// Category/subcategory taxonomy. This is app configuration, not demo data,
-// so it stays static rather than living in Firestore.
 export const RENTORA_CATEGORIES = [
   { name: "Tools", icon: "🔧", subs: ["Power Tools", "Hand Tools", "Ladders", "Garden"] },
   { name: "Electronics", icon: "💻", subs: ["Cameras", "Gaming", "Audio", "Computers"] },

@@ -4,8 +4,9 @@
 import { auth } from "./firebase.js";
 import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
 import { subscribeConversations, isUnread } from "./messages.js";
+import { isStaffUser } from "./support.js";
 
-const PROTECTED_PAGES = ["settings.html", "dashboard.html", "create-listing.html", "messages.html"];
+const PROTECTED_PAGES = ["settings.html", "dashboard.html", "create-listing.html", "messages.html", "support.html"];
 
 function currentPage() {
   return location.pathname.split("/").pop() || "index.html";
@@ -37,7 +38,7 @@ document.addEventListener("keydown", (e) => {
 
 let unsubConversations = null;
 
-onAuthStateChanged(auth, (user) => {
+onAuthStateChanged(auth, async (user) => {
   document.body.classList.remove("auth-pending");
 
   const avatarBtn = document.getElementById("avatarButton");
@@ -54,6 +55,8 @@ onAuthStateChanged(auth, (user) => {
       avatarBtn.setAttribute("aria-label", "Account menu");
       avatarBtn.onclick = (e) => { e.preventDefault(); toggleDropdown(); };
 
+      const staff = await isStaffUser(user.uid).catch(() => false);
+
       if (dropdown) {
         dropdown.innerHTML = `
           <div class="dropdown-user">
@@ -63,6 +66,8 @@ onAuthStateChanged(auth, (user) => {
           <a href="dashboard.html">My listings &amp; rentals</a>
           <a href="messages.html">Messages<span class="nav-badge hidden" id="dropdownMsgBadge">0</span></a>
           <a href="profile.html?uid=${user.uid}">View my profile</a>
+          <a href="support.html">Support</a>
+          ${staff ? `<a href="admin.html">Staff Admin</a>` : ""}
           <a href="settings.html">Settings</a>
           <button type="button" id="dropdownLogout" class="logout-btn">Log out</button>
         `;

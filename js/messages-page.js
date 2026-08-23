@@ -17,7 +17,7 @@ function escapeHtml(s) {
 }
 
 onAuthStateChanged(auth, (user) => {
-  if (!user) return; // header-auth.js redirects signed-out visitors
+  if (!user) return;
   currentUid = user.uid;
   subscribeConversations(user.uid, renderList);
 });

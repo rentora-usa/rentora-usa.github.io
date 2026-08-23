@@ -35,7 +35,7 @@ async function loadForEdit(user) {
 }
 
 onAuthStateChanged(auth, (user) => {
-  if (!user) return; // header-auth.js already redirects signed-out visitors
+  if (!user) return;
   if (editId) loadForEdit(user);
 });
 

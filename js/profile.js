@@ -76,6 +76,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     `;
   } catch (err) {
     console.error(err);
-    root.innerHTML = `<p class="state-message">Couldn't load this profile.</p>`;
+    root.innerHTML = `<p class="state-message">Couldn't load this profile. Open the browser console for the exact error — a "permission-denied" here usually means firestore.rules hasn't been redeployed since the reviews feature was added.</p>`;
   }
 });

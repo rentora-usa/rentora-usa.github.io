@@ -2,6 +2,7 @@ import { fetchListingById, hasDateConflict } from "./listings.js";
 import { auth } from "./firebase.js";
 import { createRentalRequest } from "./rentals.js";
 import { startOrOpenConversation } from "./messages.js";
+import { fetchReviewsForUser, averageRating } from "./reviews.js";
 
 document.addEventListener("DOMContentLoaded", async () => {
   const id = new URLSearchParams(location.search).get("id");
@@ -23,12 +24,24 @@ document.addEventListener("DOMContentLoaded", async () => {
   const img = (x.imageUrls && x.imageUrls[0]) || "https://placehold.co/900x600?text=No+photo";
   const isOwnListing = auth.currentUser?.uid === x.ownerId;
 
+  // The owner's star rating (from other people's completed rentals with
+  // them) is what shows here now, not a fake per-listing number.
+  let ratingHtml = "";
+  try {
+    const reviews = await fetchReviewsForUser(x.ownerId);
+    ratingHtml = reviews.length
+      ? `<span class="star-display">★ ${averageRating(reviews).toFixed(1)}</span> (${reviews.length} review${reviews.length === 1 ? "" : "s"} of owner)`
+      : `New host`;
+  } catch (err) {
+    console.error(err);
+  }
+
   content.innerHTML = `
   <div class="product-layout">
    <div class="product-gallery"><img src="${img}" alt="${x.title}"></div>
    <div class="product-info">
     <p class="eyebrow">${x.category} / ${x.subcategory}</p>
-    <h1>${x.title}</h1><div class="rating">★ ${(x.rating || 0).toFixed(1)} · ${x.locationText || ""}</div>
+    <h1>${x.title}</h1><div class="rating">${ratingHtml} · ${x.locationText || ""}</div>
     <p class="product-location">Available for local pickup. Exact address is shared after a confirmed rental.</p>
     <div class="owner">
       <strong><a href="profile.html?uid=${x.ownerId}">${x.ownerName || "Rentora member"}</a></strong>

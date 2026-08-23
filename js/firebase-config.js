@@ -1,7 +1,3 @@
-// Paste your Firebase Web App config here (from Project settings -> Your apps -> Web).
-// This value is not a secret. Security comes from your Firestore/Storage rules,
-// not from hiding this object. Do NOT put Admin SDK / service-account keys here.
-
 export const firebaseConfig = {
   apiKey: "AIzaSyDqQwTspDeEpf8nAXt3AP04v8Phn-e5kJQ",
   authDomain: "rentora-415ca.firebaseapp.com",

@@ -50,7 +50,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (price.value) data = data.filter(x => x.pricePerDay <= Number(price.value));
     if (sort.value === "priceLow") data.sort((a, b) => a.pricePerDay - b.pricePerDay);
     if (sort.value === "priceHigh") data.sort((a, b) => b.pricePerDay - a.pricePerDay);
-    if (sort.value === "rating") data.sort((a, b) => (b.rating || 0) - (a.rating || 0));
     document.getElementById("resultsGrid").innerHTML = data.map(listingCard).join("");
     document.getElementById("resultCount").textContent = `${data.length} item${data.length === 1 ? "" : "s"}`;
     document.getElementById("activeSearch").textContent = q ? `Results for "${query.value}"` : "";
@@ -60,5 +59,5 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 function listingCard(x) {
   const img = (x.imageUrls && x.imageUrls[0]) || "https://placehold.co/600x400?text=No+photo";
-  return `<article class="listing-card"><a href="product.html?id=${encodeURIComponent(x.id)}"><div class="listing-image"><img src="${img}" alt="${x.title}" loading="lazy"></div><div class="listing-info"><div class="listing-title">${x.title}</div><div class="listing-meta">★ ${(x.rating || 0).toFixed(1)} · ${x.locationText || ""}</div><div class="listing-price">$${x.pricePerDay}<small> / day</small></div></div></a></article>`;
+  return `<article class="listing-card"><a href="product.html?id=${encodeURIComponent(x.id)}"><div class="listing-image"><img src="${img}" alt="${x.title}" loading="lazy"></div><div class="listing-info"><div class="listing-title">${x.title}</div><div class="listing-meta">${x.locationText || ""}</div><div class="listing-price">$${x.pricePerDay}<small> / day</small></div></div></a></article>`;
 }

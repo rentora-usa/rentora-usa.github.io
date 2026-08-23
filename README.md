@@ -2,93 +2,106 @@
 
 **Rent anything.**
 
-Rentora is a clean, Airbnb-inspired peer-to-peer rental marketplace. The frontend now runs on a **live Firebase backend**: real email/password + Google authentication, and listings/rental requests read from and written to Firestore instead of a hardcoded demo array.
+Rentora is a peer-to-peer rental marketplace running on a live Firebase backend: real authentication (email/password, Google, Apple), Firestore-backed listings and rentals, real-time messaging, a person-to-person star rating system, and a Discord-style staff support desk.
 
-- Responsive homepage, search, and product pages backed by Firestore
-- Real Firebase Authentication (email/password, Google, **and Apple**), with an account dropdown that updates in place instead of full-page reloads
-- "List an item" flow (also doubles as the edit flow) that writes real `listings` documents
-- Rental request flow with a client-side date-conflict check and server-enforced validation
-- **Real-time dashboard** — manage your own listings (edit, hide, delete) and track rental requests you've sent or received (accept/decline/cancel), updating live via `onSnapshot`
-- **Messaging** — a direct conversation thread between renter and owner per listing, real-time, with an unread badge in the header
-- **Star ratings & reviews** — after a rental is marked complete, both sides can rate and review each other; a public profile page shows the resulting average
-- **Settings** — edit your public profile, see account info, sign out
-- **Help Center** — a searchable FAQ
-- A 404 page for GitHub Pages
-- Firestore security rules with field validation, status-flow enforcement, and cross-document checks (e.g. a rental request can't be created against a delisted item)
-- GitHub Pages-friendly static frontend (no build step — plain ES modules)
+---
+
+## 8. This round: two bug fixes + a staff support system
+
+### Bug fix — "the chat system doesn't work"
+
+**Root cause:** `startOrOpenConversation()` used to `getDoc()` a conversation to check whether it already existed before deciding whether to create it. That doesn't work with Firestore security rules: the read rule requires the requester to already be listed in the conversation's `participants` array — but for a **brand-new** conversation there's no document yet, so there's no `participants` array to check against, and Firestore denies the read outright rather than treating it as "not found." So the very first message anyone ever tried to send — clicking "Message owner" for the first time — failed with `permission-denied` before a conversation could ever be created.
+
+**Fix:** `js/messages.js` no longer checks first. It calls `setDoc(ref, {...}, { merge: true })` directly — Firestore evaluates that as a `create` when the document is new and an `update` when it isn't, so no existence check is needed at all. The rule also now has a defensive `resource == null ||` clause as a second layer of protection, in case anything else ever reads a conversation the same way.
+
+**If chat still doesn't work after updating these files:** the most common cause is that `firestore.rules` wasn't redeployed. Firestore rules only take effect once you paste the file's contents into **Firebase Console → Firestore → Rules → Publish** (or run `firebase deploy --only firestore:rules`) — editing the file locally does nothing on its own. If `conversations` was never covered by whatever rules are currently live, every read/write to it is denied by Firestore's default-deny behavior. Worth checking the browser console for the exact error (`permission-denied` vs. something else) next time — that narrows it down immediately.
+
+### "The rating system doesn't work"
+
+Two things were likely going on here:
+
+1. **Listing cards always showed "★ 0.0."** Ratings in Rentora are about *people*, not *items* — you rate the person you rented from or to, not the couch. But the listing cards never stopped rendering a per-listing star number, and since nothing ever wrote to a listing's `rating` field, it was permanently zero. That reads as "broken" even though nothing was erroring. Fixed: listing cards (`app.js`, `search.js`) no longer show a rating at all, and the product page (`product.js`) now shows the **owner's** real, live-computed rating instead (or "New host" if they have none yet) — which is the number that was actually supposed to be meaningful.
+2. **If it was actually failing to submit** (not just displaying wrong), I audited `reviews.js`, `dashboard.js`'s review dialog, and the `reviews` rule end-to-end and didn't find a code bug — the review flow doesn't have the same existence-check problem the chat did, because reviews are publicly readable (`allow read: if true`), so checking whether one exists never hits a permission wall. The leading suspect if this is still failing is the same one as above: **stale/undeployed rules**. `dashboard.js` now surfaces a more specific error message pointing at that if a review submission fails.
+
+If you hit either of these again, open the browser dev console when it happens — a `permission-denied` FirebaseError there, with the collection name in the stack, is almost always "the deployed rules don't match this code" rather than a client bug.
+
+### New: Staff support desk (Discord-style tickets)
+
+- **`support.html`** — any signed-in user's own support view. "New ticket" prompts for a subject and first message, then opens a live chat thread with your support team. Users can close/reopen their own tickets.
+- **`admin.html`** — staff-only. A ticket queue (Open / Assigned to me / Closed), a live thread per ticket with Claim and Close/Reopen actions, and a "My support identity" editor where a staff member sets the display name and photo shown to users — deliberately separate from their personal Rentora profile.
+- **Becoming staff is a manual, console-only action** — see below. There's no in-app way to grant yourself or anyone else staff access, on purpose.
+
+#### Making someone staff
+
+1. Firebase Console → Firestore Database → Start collection (if `staff` doesn't exist yet) → collection ID `staff`.
+2. Add a document whose **Document ID is that person's Firebase Auth UID** (find it in Authentication → Users). Fields don't matter yet — an empty doc is enough to grant access; they'll fill in `displayName`/`photoURL` themselves from the admin panel's "My support identity" button.
+3. That person can now see `admin.html` when they visit it (the link also appears in their account dropdown automatically).
+
+#### Data model
+
+```text
+staff/{uid}                    displayName, photoURL — self-editable once the doc exists
+supportTickets/{ticketId}      userId, userName, subject, status (open|closed),
+                                assignedStaffId, assignedStaffName,
+                                lastMessage, lastMessageAt, lastSenderId, createdAt
+  /messages/{messageId}         senderId, senderRole (user|staff), senderName, text, createdAt
+```
+
+Security rules (`firestore.rules`) restrict ticket read/write to the ticket's owner and staff; only staff can claim a ticket or set `senderRole: "staff"` on a message, and only the actual ticket owner can send as `senderRole: "user"` — so a regular user can't spoof a staff reply and vice versa.
+
+#### What this doesn't do yet
+
+- No notifications when a new ticket or reply comes in — staff need to have `admin.html` open (or check back) to see new tickets, same limitation as the peer messaging system.
+- No file/image attachments in tickets.
+- No ticket categories/priority/SLA tracking — it's a flat open/closed queue.
 
 ---
 
 ## 1. Put it on GitHub
 
 1. Create a new GitHub repository, for example `rentora`.
-2. Upload everything in this folder, keeping the structure intact:
-   - `index.html`, `about.html`, `login.html`, `search.html`, `product.html`, `create-listing.html`
-   - `css/`
-   - `js/`
+2. Upload everything in this folder, keeping the structure intact.
 3. In GitHub, go to **Settings → Pages** → **Build and deployment** → **Deploy from a branch** → select `main` / `/ (root)` → Save.
 
-For local testing, use a local server (e.g. VS Code Live Server) rather than opening `index.html` directly — the site now uses ES module `<script type="module">` tags, which most browsers block over the `file://` protocol.
+For local testing, use a local server (e.g. VS Code Live Server) rather than opening `index.html` directly — the site uses ES module `<script type="module">` tags, which most browsers block over the `file://` protocol.
 
 ---
 
 ## 2. Firebase project
 
-Your Firebase Web App config already lives in `js/firebase-config.js`. That object (`apiKey`, `authDomain`, etc.) is **not a secret** — it identifies your project to Firebase's servers, it doesn't authorize access on its own. Your Firestore/Storage security rules are what actually protect data, so keep those locked down instead of trying to hide this file.
-
-If you ever need to point this frontend at a different Firebase project, replace the values in `js/firebase-config.js` with the config from **Project settings → Your apps → Web app** in the Firebase console.
+Your Firebase Web App config lives in `js/firebase-config.js`. That object (`apiKey`, `authDomain`, etc.) is **not a secret** — your Firestore/Storage security rules are what actually protect data, so keep those locked down instead of trying to hide this file.
 
 ---
 
 ## 3. Authentication
 
 ### Email/Password
-
-1. Firebase Console → **Build → Authentication → Get started**.
-2. **Sign-in method** → enable **Email/Password**.
+Firebase Console → **Build → Authentication → Get started → Sign-in method** → enable **Email/Password**.
 
 ### Google Sign-In
-
-1. Same **Sign-in method** tab → enable **Google**.
-2. Set a support email (required by Google's consent screen).
-3. Go to **Authentication → Settings → Authorized domains** and make sure both `localhost` (for local dev) and your GitHub Pages domain (e.g. `yourname.github.io`) are listed. `signInWithPopup` will fail with `auth/unauthorized-domain` on any domain not in this list.
+1. Same **Sign-in method** tab → enable **Google**, set a support email.
+2. **Authentication → Settings → Authorized domains** → add `localhost` and your GitHub Pages domain, or `signInWithPopup` fails with `auth/unauthorized-domain`.
 
 ### Apple Sign-In
+Real setup on Apple's side — can't be done from code alone:
+1. Paid **Apple Developer Program** membership required.
+2. Create an **App ID** with Sign in with Apple enabled, then a **Services ID** (the client ID Firebase uses), and register Firebase's return URL against it.
+3. Create a **Sign in with Apple private key**, note the Key ID and Team ID.
+4. Firebase Console → Authentication → Sign-in method → enable **Apple**, paste in Services ID, Team ID, Key ID, and the private key.
+5. Use the same authorized domains as Google above.
 
-This one has real setup outside of Firebase, on Apple's side — it can't be done from code alone:
-
-1. You need a paid **Apple Developer Program** membership.
-2. In the Apple Developer portal: create an **App ID** with "Sign in with Apple" enabled, then a **Services ID** (this becomes the client ID Firebase uses), and register Firebase's return URL against that Services ID.
-3. Create a **Sign in with Apple private key** (Certificates, Identifiers & Profiles → Keys) and note the Key ID and your Team ID.
-4. Firebase Console → Authentication → Sign-in method → enable **Apple**, and paste in the Services ID, Team ID, Key ID, and the private key.
-5. Make sure the same authorized domains from the Google section above are set — Apple's popup flow needs them too.
-
-Once that's done, no further code changes are needed — `js/firebase.js` already builds an `OAuthProvider("apple.com")` with the `email`/`name` scopes requested, and `js/auth.js` wires it to the "Continue with Apple" button. Apple only returns the person's name on their *very first* authorization, so `ensureUserDoc()` captures it then and falls back to the email's local part afterward.
-
-`js/auth.js` implements all three flows via `signInWithEmailAndPassword` / `createUserWithEmailAndPassword` and `signInWithPopup()` for Google/Apple. Every path creates a matching `users/{uid}` profile document the first time someone signs in.
+`js/auth.js` implements all three via `signInWithEmailAndPassword`/`createUserWithEmailAndPassword` and `signInWithPopup()`. Every path creates a matching `users/{uid}` profile document on first sign-in.
 
 ### Sign-in/out UX
-
-- The header avatar is now an account dropdown (`js/header-auth.js`) — click it to reach Dashboard, Settings, or Log out, without leaving the page you're on.
-- Logging out on a public page (home, search, a listing) just updates the header in place; you keep browsing. Logging out from a page that requires an account (Dashboard, Settings, List an item) sends you back to the homepage.
-- Clicking "List an item" or the avatar while signed out takes you to `login.html?next=<page>` — after logging in you land back where you meant to go, not always the homepage.
-- Visiting `login.html` while already signed in redirects you straight through instead of showing the form again.
+- The header avatar is an account dropdown (`js/header-auth.js`) — Dashboard, Messages (with an unread badge), your profile, Support, Settings, and (if you're staff) Staff Admin, plus Log out.
+- Signing out on a public page updates the header in place; signing out from a page that needs an account sends you home.
+- `login.html?next=<page>` sends you back to where you meant to go after logging in. Already signed in and land on `login.html` anyway? It redirects you straight through.
 
 ---
 
 ## 4. Firestore
 
-1. Firebase Console → **Build → Firestore Database → Create database**.
-2. Start in **production mode** (the rules in `firestore.rules` cover this — don't leave it in test mode long-term).
-3. Pick the closest region to your users.
-
-### Does Firestore need collections created ahead of time?
-
-**No.** Firestore is schemaless. A collection — and any document inside it — is created implicitly the first time you write to that path. You'll never need to manually create `users`, `listings`, `rentalRequests`, or `reviews` in the console; `createListing()` in `js/listings.js` creates the `listings` collection on its very first call, for example.
-
-Two things worth knowing:
-- An **empty** collection isn't visible in the console. If you delete the last document in a collection, the collection itself disappears from the console view (it's not literally deleted, it just has nothing to show).
-- Combined queries — e.g. filtering by `available == true` **and** `category == X` **and** sorting by `createdAt` — usually need a **composite index**. To keep this MVP simple and index-free, `fetchListings()` only sends Firestore a single `where("available","==",true)` filter and does category filtering/sorting client-side. As your catalog grows past a few hundred listings, move that filtering server-side; Firestore will throw an error with a direct "create this index" link the first time you run a query that needs one.
+Firestore is schemaless — collections and documents are created implicitly on first write, nothing needs to be pre-created in the console except the `staff` doc described in §8 (that one's deliberately manual).
 
 ### Collections used
 
@@ -106,50 +119,36 @@ conversations/{id}        listingId, listingTitle, ownerId, renterId, participan
                           lastMessage, lastMessageAt, lastSenderId, lastRead{uid: Timestamp}
                           — doc id is "{listingId}_{renterId}"
   /messages/{messageId}    senderId, text, createdAt
+staff/{uid}                displayName, photoURL — see §8, created manually
+supportTickets/{id}        userId, userName, subject, status, assignedStaffId,
+                          assignedStaffName, lastMessage, lastMessageAt, lastSenderId, createdAt
+  /messages/{messageId}    senderId, senderRole, senderName, text, createdAt
 ```
 
 ### Renting: fluid and secured, with one honest gap
 
-- **Dates are Firestore `Timestamp`s**, not strings — this lets rules validate `endDate > startDate` directly, and sorts correctly.
-- **Availability lives on the listing**, not by querying other people's requests. When an owner accepts a request, `js/dashboard.js` calls `addBookedRange()` to append the accepted range to `listings/{id}.bookedRanges` — a public, single-document field. This is what lets `hasDateConflict()` in `js/listings.js` warn a renter about overlapping dates *without* needing read access to other renters' private `rentalRequests` (which the rules correctly forbid).
-- **The `rentalRequests` create rule now checks the listing itself**: a request can't be forged against a delisted (`available: false`) item, and the `ownerId` on the request must actually match the listing's real owner.
-- **The honest gap:** the conflict check above is a UX convenience, not a transaction. Two renters can still both pass the check and both get accepted by the owner in quick succession — Firestore security rules validate one write in isolation, they can't atomically check-and-reserve across documents. Closing that gap for real needs a Cloud Function running the accept + booked-range update as a server-side transaction. Worth doing before this handles real money changing hands; not necessary for a low-volume MVP where the owner just manually declines the second request.
-- The dashboard's request lists (`js/rentals.js` → `subscribeRequestsAsRenter/Owner`) are **live** (`onSnapshot`), so accept/decline/cancel — from this tab, another tab, or another device — shows up immediately without a reload.
-
-### Messaging
-
-- One thread per (listing, renter) pair, id'd deterministically so "Message owner" always reopens the same conversation. `js/messages.js` has `startOrOpenConversation()`, `subscribeConversations()`, `subscribeMessages()`, and `sendMessage()`.
-- Rules restrict both the `conversations` doc and its `messages` subcollection to the two `participants` — nobody else can read or write into a thread they're not part of, and the participant list itself is immutable after creation.
-- The header's unread badge (`js/header-auth.js`) subscribes to all of a signed-in person's conversations and compares `lastMessageAt` against their own `lastRead` entry, live.
-
-### Star ratings & reviews
-
-- After an owner marks a rental `completed`, both sides get a "Review" button on the dashboard (`js/dashboard.js`) that opens a star-picker + text dialog (`js/reviews.js` → `submitReview()`).
-- Review documents use a **deterministic id** (`{rentalRequestId}_{authorId}`), enforced in `firestore.rules` — so each person gets exactly one review per completed rental, and resubmitting the form edits it instead of creating a duplicate.
-- The rule for creating/editing a review re-checks the referenced `rentalRequests` doc server-side: it must be `completed`, and the author/target must actually be that rental's renter and owner. You can't review someone you never transacted with.
-- Rather than trusting a stored aggregate rating (which a client could forge without a Cloud Function to recompute it), `js/profile.js` computes the average live from `fetchReviewsForUser()` each time a profile loads. Slightly more reads, but the number shown is never fake.
-- `profile.html?uid=<uid>` is the public page this powers — linked from every listing's "Listed by" line and from the dropdown's "View my profile".
+- Dates are Firestore `Timestamp`s, letting rules validate `endDate > startDate` directly.
+- Availability lives on the listing (`bookedRanges[]`), not by querying other people's private requests — `js/dashboard.js` appends to it when an owner accepts, and `hasDateConflict()` in `js/listings.js` reads it to warn renters before they submit.
+- The `rentalRequests` create rule cross-checks the listing itself: a request can't be forged against a delisted item or the wrong owner.
+- **The honest gap:** the conflict check is a UX convenience, not a transaction. Two renters can still both pass the check and both get accepted in quick succession. Closing that for real needs a Cloud Function doing accept + reserve as a server-side transaction — worth it before real money is on the line, not necessary for a low-volume MVP.
+- Dashboard request lists are real-time (`onSnapshot`) — accept/decline/cancel reflects immediately across tabs/devices.
 
 ### Security rules
 
-Deploy the rules in `firestore.rules` (Firebase Console → Firestore → Rules, or via the Firebase CLI: `firebase deploy --only firestore:rules`). On top of what's described above, they also:
+Deploy `firestore.rules` via **Firebase Console → Firestore → Rules → Publish** (or `firebase deploy --only firestore:rules`) — **this step is required every time the rules file changes**, including the fixes in §8. On top of collection-specific validation, they also:
+- Prevent a listing owner from forging `rating`/`reviewCount` on their own listing.
+- Lock `rentalRequests` status transitions to exactly what the owner/renter are each allowed to do.
+- Keep `users.email`/`createdAt` immutable after signup.
+- Restrict `conversations` and `supportTickets` (and their `messages` subcollections) to participants only, with a `resource == null` fallback so checking "does this exist yet" never itself gets denied.
+- Gate `admin.html` functionality via `isStaff()`, which checks for a `staff/{uid}` doc that only a human with console access can create.
 
-- Validate field types/sizes on `create` (title length, price > 0, rating range, etc.) instead of trusting the client blindly.
-- Prevent a listing owner from forging `rating`/`reviewCount` on their own listing during an edit.
-- Lock `rentalRequests` status transitions down: only the **owner** can move a request to `accepted` / `declined` / `completed`, only the **renter** can `cancel` a still-`pending` request, and neither can touch any other field once the request exists.
-- Keep `users.email` and `users.createdAt` immutable after account creation.
-
-Treat this as a strong starting point, not a final audit — review it against your actual product rules before real money is involved.
+Treat this as a strong starting point, not a final audit.
 
 ---
 
 ## 5. Firebase Storage (optional next step)
 
-`create-listing.html` currently takes photos as comma-separated URLs to keep the MVP simple. To let owners upload photos directly:
-
-1. Firebase Console → **Build → Storage → Get started**, same region as Firestore.
-2. Store images at paths like `listings/{listingId}/{imageId}.jpg` and `users/{uid}/profile.jpg`.
-3. Add `uploadBytes`/`getDownloadURL` calls (from `firebase/storage`) in `js/create-listing.js`, and restrict write rules to the listing's owner.
+Photos are pasted URLs for now (`create-listing.html`, and it'd be natural to add a profile-photo uploader to `settings.html` and `admin.js`'s staff-identity editor too). To move to direct uploads: Storage → Get started, same region as Firestore, store at `listings/{listingId}/{imageId}.jpg` / `users/{uid}/profile.jpg`, and restrict write rules to the relevant owner.
 
 ---
 
@@ -161,63 +160,55 @@ js/
   firebase.js            Initializes app/auth/db/storage + Google/Apple providers
   categories.js          Static category/subcategory taxonomy
   auth.js                 Email/password + Google + Apple sign-in (login.html)
-  header-auth.js          Account dropdown, unread-messages badge, fluid sign-in/out, page guards
-  listings.js              Firestore reads/writes for listings — incl. owner queries, edit, delete,
-                            booked-date ranges, and the client-side conflict check
-  rentals.js                Firestore reads/writes for rentalRequests, real-time dashboard subscriptions
-  messages.js                Conversations + real-time messages subcollection
+  header-auth.js          Account dropdown, unread badge, staff-admin link, fluid sign-in/out, page guards
+  listings.js              Listings CRUD, booked-date ranges, conflict check
+  rentals.js                Rental request CRUD + real-time dashboard subscriptions
+  messages.js                Peer conversations + real-time messages (fixed this round — see §8)
   reviews.js                  Submit/fetch reviews, live average-rating computation
-  app.js                   Homepage: featured listings from Firestore
-  search.js                 Search/browse page: Firestore-backed filtering
-  product.js                 Product page: request-to-rent, conflict check, message owner
+  support.js                  Support tickets: create, subscribe, reply, claim, staff profile
+  app.js                   Homepage: featured listings
+  search.js                 Search/browse page
+  product.js                 Product page: request-to-rent, conflict check, message owner, owner rating
   create-listing.js          "List an item" form — also handles editing via ?id=
-  settings.js                  Settings page: profile editing, account info, sign out
-  dashboard.js                 Dashboard: manage listings, live requests, accept/decline/review
-  profile.js                    Public profile page: star rating + reviews + active listings
-  messages-page.js               Messages page: conversation list + active thread
+  settings.js                  Settings: profile editing, account info, sign out
+  dashboard.js                 Manage listings, live requests, accept/decline/review
+  profile.js                    Public profile: star rating + reviews + active listings
+  messages-page.js              Peer messages: conversation list + thread
+  support-page.js                End-user support: ticket list + new ticket + thread
+  admin.js                        Staff admin panel: ticket queue, claim/respond, staff identity
 
 Pages: index.html, about.html, search.html, product.html, login.html,
        create-listing.html, settings.html, dashboard.html, messages.html,
-       profile.html, help.html, 404.html
+       profile.html, help.html, support.html, admin.html, 404.html
 ```
-
-### Pages added this round, and why
-
-- **Dashboard** (`dashboard.html`) — the only place to see and manage what you've published and requested. Three tabs: your listings (edit/hide/delete), rentals you've requested (cancel while pending), and requests on your own listings (accept/decline, then review once completed).
-- **Messages** (`messages.html`) — a real-time conversation list + thread between a renter and an owner, reachable from any listing or dashboard row.
-- **Profile** (`profile.html?uid=`) — the public "is this person actually good?" page: star rating, review list, and their active listings.
-- **Settings** (`settings.html`) — edits the `users/{uid}` profile doc (display name, location, bio, photo) and shows read-only account info (email, sign-in method, member-since date).
-- **Help Center** (`help.html`) — a searchable, static FAQ. No backend needed; it's plain `<details>` accordions filtered by a small inline script.
-- **404** (`404.html`) — GitHub Pages serves this automatically for unmatched paths once it's in the repo root.
 
 ---
 
 ## 7. What to build next
 
-1. **Direct photo uploads** to Firebase Storage (see §5) instead of pasted URLs — this would touch both `create-listing.html`/`create-listing.js` and a profile-photo uploader in `settings.html`.
-2. **Server-side booking transactions** — close the double-booking race condition described in §4 with a Cloud Function that accepts a request and reserves its date range atomically.
-3. **Payments** — Stripe Connect for marketplace payouts. Never process card numbers directly in the frontend.
-4. **Trust & safety** — report/block flows, identity checks where appropriate, admin moderation. The one-review-per-completed-rental system is a start, but there's no reporting or blocking mechanism yet.
-5. **Push/email notifications** — for new messages, accepted requests, etc. Firestore's real-time listeners already surface this live while someone's on the site; notifying them while they're away needs Cloud Functions + FCM or an email provider.
-6. **Aggregate rating caching** — `profile.js` computes a person's star average live from every review each time their profile loads, which is honest but won't scale past a few hundred reviews per person. A Cloud Function trigger that maintains a cached `rating`/`reviewCount` on `users/{uid}` (the same pattern already reserved-but-unused on `listings`) would fix that without reintroducing the "client could forge it" problem, since only the trusted function would write the aggregate.
+1. **Server-side booking transactions** — close the double-booking race described in §4 with a Cloud Function.
+2. **Direct photo uploads** to Storage instead of pasted URLs.
+3. **Payments** — Stripe Connect. Never process card numbers in the frontend.
+4. **Notifications** — for new messages/tickets/accepted requests. Real-time listeners already surface this live while someone's on the site; reaching them while they're away needs Cloud Functions + FCM or email.
+5. **Aggregate rating caching** — profiles compute the star average live from every review each time, which is honest but won't scale past a few hundred reviews per person. A Cloud Function trigger maintaining a cached `rating`/`reviewCount` on `users/{uid}` would fix that without reintroducing the "client could forge it" problem.
+6. **Ticket priority/categories**, file attachments, and staff notifications for the support desk.
 
 ### Important architecture note
 
-Never put Firebase **Admin SDK** credentials or a service-account JSON file in this frontend or in GitHub. Admin credentials belong only on a trusted server (Cloud Functions, or your own backend).
+Never put Firebase **Admin SDK** credentials or a service-account JSON file in this frontend or in GitHub.
 
 ---
 
 ## Project status
 
-- Homepage, search, filters, categories, product pages: working, Firestore-backed
-- Auth: real Firebase Auth, email/password + Google + Apple, fluid dropdown sign-in/out
-- Listing creation & editing: working, writes to Firestore
-- Rental requests: working — Timestamp dates, client-side conflict check, server-validated against the listing
-- Dashboard: working — manage listings, live-updating requests, accept/decline/cancel/complete
-- Messaging: working — real-time per-listing conversations, unread badge
-- Star ratings & reviews: working — one review per completed rental, public profile pages
-- Help Center: working — searchable static FAQ
-- Settings: working — edit profile, view account info, sign out
-- Firestore security rules: tightened (see §4), including cross-document checks on rental requests and reviews
-- Photo uploads to Storage: not yet — URLs only
-- True double-booking prevention (server-side transaction), payments, notifications, moderation tools: not yet included
+- Homepage, search, filters, categories, product pages: working
+- Auth: email/password + Google + Apple, fluid dropdown sign-in/out
+- Listings: create/edit/hide/delete, working
+- Rentals: request/accept/decline/cancel/complete, Timestamp dates, conflict check, working
+- Messaging: real-time, **fixed this round** (see §8)
+- Star ratings & reviews: person-to-person, live-computed, working — listing cards no longer show a fake rating
+- Staff support desk: new this round — tickets, live chat, staff identity, admin queue
+- Help Center: working, now links to Support
+- Settings, Dashboard: working
+- Firestore security rules: hardened, including the conversation existence-check fix and new staff/ticket rules — **redeploy them if you haven't since this round**
+- Photo uploads to Storage, server-side booking transactions, payments, notifications: not yet included

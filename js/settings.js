@@ -13,7 +13,7 @@ function showMessage(text, isError = true) {
 }
 
 onAuthStateChanged(auth, async (user) => {
-  if (!user) return; // header-auth.js redirects signed-out visitors to login
+  if (!user) return;
 
   document.getElementById("accountEmail").textContent = user.email || "—";
   const providerId = user.providerData[0]?.providerId;

@@ -43,14 +43,13 @@ function escapeHtml(s) {
 let currentUid = null;
 
 onAuthStateChanged(auth, (user) => {
-  if (!user) return; // header-auth.js redirects signed-out visitors
+  if (!user) return;
   currentUid = user.uid;
   loadListings(user.uid);
   subscribeRequestsAsRenter(user.uid, items => renderRequests("rentingList", items, "renter"));
   subscribeRequestsAsOwner(user.uid, items => renderRequests("ownerList", items, "owner"));
 });
 
-// ---------- My listings ----------
 async function loadListings(uid) {
   const el = document.getElementById("listingsList");
   try {
@@ -96,7 +95,6 @@ function listingRow(x) {
   </div>`;
 }
 
-// ---------- Rental requests (both directions, real-time) ----------
 async function renderRequests(elId, items, viewerRole) {
   const el = document.getElementById(elId);
   if (!items.length) {
@@ -177,7 +175,6 @@ async function requestRow(r, viewerRole) {
   </div>`;
 }
 
-// ---------- Reviews on completed rentals ----------
 async function wireReviewButton(r, viewerRole) {
   const slot = document.getElementById(`review-slot-${r.id}`);
   if (!slot) return;
@@ -234,7 +231,7 @@ function openReviewDialog(r, targetUserId, existing) {
       wireReviewButton(r, targetUserId === r.renterId ? "owner" : "renter");
     } catch (err) {
       console.error(err);
-      errorBox.textContent = "Couldn't save your review. Try again.";
+      errorBox.textContent = "Couldn't save your review — open the browser console for the exact error. If it says permission-denied, firestore.rules likely needs to be redeployed (see README §8).";
       errorBox.classList.remove("hidden");
     }
   });

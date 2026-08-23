@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Support | Rentora</title><link rel="stylesheet" href="css/styles.css">
+</head>
+<body class="auth-pending">
+<header class="site-header">
+  <a class="logo" href="index.html">rentora<span>.</span></a>
+  <nav class="main-nav"><a href="index.html">Explore</a><a href="help.html">Help</a><a href="messages.html" id="messagesNavLink" class="hidden">Messages<span class="nav-badge hidden" id="messagesBadge">0</span></a></nav>
+  <div class="header-actions">
+    <a href="create-listing.html" class="host-link">List an item</a>
+    <div class="account-menu">
+      <button type="button" class="avatar-button" id="avatarButton" aria-haspopup="true" aria-label="Account">♙</button>
+      <div class="account-dropdown" id="accountDropdown"></div>
+    </div>
+  </div>
+</header>
+
+<main class="page-shell messages-page">
+  <div class="dash-header">
+    <div><p class="eyebrow">Help Center</p><h1 style="font:700 34px Manrope;letter-spacing:-1.2px;margin:0">Support tickets</h1></div>
+    <button class="primary-button" id="newTicketBtn">New ticket</button>
+  </div>
+
+  <div class="messages-layout" style="margin-top:30px">
+    <aside class="conversation-list" id="ticketList">
+      <p class="state-message">Loading your tickets…</p>
+    </aside>
+    <section class="thread-panel" id="threadPanel">
+      <div class="state-message">Open a ticket, or pick one from the list, to chat with support.</div>
+    </section>
+  </div>
+</main>
+
+<script type="module" src="js/firebase.js"></script>
+<script type="module" src="js/header-auth.js"></script>
+<script type="module" src="js/support-page.js"></script>
+</body>
+</html>

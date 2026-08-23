@@ -32,7 +32,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 });
 
+// Ratings on Rentora are earned by *people* (see profile.html), not items —
+// a listing has no reviews of its own, so we never show a fake "★ 0.0"
+// here. "New" just signals the owner hasn't rented this out yet.
 function listingCard(x) {
   const img = (x.imageUrls && x.imageUrls[0]) || "https://placehold.co/600x400?text=No+photo";
-  return `<article class="listing-card"><a href="product.html?id=${encodeURIComponent(x.id)}"><div class="listing-image"><img src="${img}" alt="${x.title}" loading="lazy"></div><div class="listing-info"><div class="listing-title">${x.title}</div><div class="listing-meta">★ ${(x.rating || 0).toFixed(1)} · ${x.locationText || ""}</div><div class="listing-price">$${x.pricePerDay}<small> / day</small></div></div></a></article>`;
+  return `<article class="listing-card"><a href="product.html?id=${encodeURIComponent(x.id)}"><div class="listing-image"><img src="${img}" alt="${x.title}" loading="lazy"></div><div class="listing-info"><div class="listing-title">${x.title}</div><div class="listing-meta">${x.locationText || ""}</div><div class="listing-price">$${x.pricePerDay}<small> / day</small></div></div></a></article>`;
 }
