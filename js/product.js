@@ -50,11 +50,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     <p class="product-description">${x.description || ""}</p>
     <div class="booking-card">
      <div class="listing-price">$${x.pricePerDay}<small> / day</small></div>
+     ${x.depositAmount > 0 ? `<div class="listing-meta" style="margin-top:6px">+ $${x.depositAmount} refundable security deposit</div>` : ""}
      ${isOwnListing ? `<p class="demo-note">This is your own listing.</p>` : `
      <div class="booking-row"><label>Start<input id="startDate" type="date"></label><label>End<input id="endDate" type="date"></label></div>
      <button class="primary-button" id="requestButton">Request to rent</button>
      <button class="chip-btn full" id="messageButton" style="margin-top:10px;width:100%">Message owner</button>
      <p class="demo-note" id="requestNote"></p>
+     ${x.depositAmount > 0 ? `<p class="demo-note">Rentora doesn't charge or hold payments yet — the deposit is tracked so the owner can note if it's returned fine or claim against it if not.</p>` : ""}
      `}
     </div>
    </div>
@@ -103,7 +105,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         ownerId: x.ownerId,
         renterId: auth.currentUser.uid,
         start, end,
-        totalPrice: days * x.pricePerDay
+        totalPrice: days * x.pricePerDay,
+        depositAmount: x.depositAmount || 0
       });
       note.textContent = "Request sent to the owner.";
     } catch (err) {

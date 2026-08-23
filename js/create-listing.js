@@ -30,6 +30,7 @@ async function loadForEdit(user) {
   catSelect.value = x.category || "";
   updateSubs(x.subcategory);
   document.getElementById("price").value = x.pricePerDay || "";
+  document.getElementById("depositAmount").value = x.depositAmount || "";
   document.getElementById("location").value = x.locationText || "";
   document.getElementById("imageUrls").value = (x.imageUrls || []).join(", ");
 }
@@ -55,6 +56,7 @@ document.getElementById("listingForm").addEventListener("submit", async (e) => {
     category: catSelect.value,
     subcategory: subSelect.value,
     pricePerDay: Number(document.getElementById("price").value),
+    depositAmount: Number(document.getElementById("depositAmount").value) || 0,
     locationText: document.getElementById("location").value.trim(),
     imageUrls
   };

@@ -4,7 +4,7 @@ import {
   fetchListingsByOwner, setListingAvailability, deleteListing,
   fetchListingById, addBookedRange
 } from "./listings.js";
-import { subscribeRequestsAsRenter, subscribeRequestsAsOwner, updateRequestStatus } from "./rentals.js";
+import { subscribeRequestsAsRenter, subscribeRequestsAsOwner, updateRequestStatus, applyOverdueDepositRule, confirmCleanReturn, reportDamageClaim, RETURN_GRACE_HOURS } from "./rentals.js";
 import { submitReview, fetchMyReviewFor } from "./reviews.js";
 import { startOrOpenConversation } from "./messages.js";
 
@@ -47,7 +47,13 @@ onAuthStateChanged(auth, (user) => {
   currentUid = user.uid;
   loadListings(user.uid);
   subscribeRequestsAsRenter(user.uid, items => renderRequests("rentingList", items, "renter"));
-  subscribeRequestsAsOwner(user.uid, items => renderRequests("ownerList", items, "owner"));
+  subscribeRequestsAsOwner(user.uid, items => {
+    renderRequests("ownerList", items, "owner");
+    // Client-triggered version of the "not returned by deadline" rule —
+    // see the note in rentals.js and README §9 for why this only runs
+    // when the owner's dashboard happens to be open, not on a schedule.
+    applyOverdueDepositRule(items);
+  });
 });
 
 async function loadListings(uid) {
@@ -138,6 +144,14 @@ async function renderRequests(elId, items, viewerRole) {
         catch (err) { console.error(err); e.target.disabled = false; }
       });
     }
+    if (viewerRole === "owner" && r.depositAmount > 0 && r.depositStatus === "pending" && (r.status === "accepted" || r.status === "completed")) {
+      document.getElementById(`return-clean-${r.id}`)?.addEventListener("click", async (e) => {
+        e.target.disabled = true;
+        try { await confirmCleanReturn(r.id); }
+        catch (err) { console.error(err); e.target.disabled = false; }
+      });
+      document.getElementById(`report-damage-${r.id}`)?.addEventListener("click", () => openDamageDialog(r));
+    }
     document.getElementById(`message-${r.id}`)?.addEventListener("click", async () => {
       try {
         const title = await listingTitle(r.listingId);
@@ -158,21 +172,41 @@ async function requestRow(r, viewerRole) {
   const canAccept = viewerRole === "owner" && r.status === "pending";
   const canCancel = viewerRole === "renter" && r.status === "pending";
   const canComplete = viewerRole === "owner" && r.status === "accepted";
+  const canResolveDeposit = viewerRole === "owner" && r.depositAmount > 0 && r.depositStatus === "pending" && (r.status === "accepted" || r.status === "completed");
 
   const actions = [`<button class="chip-btn" id="message-${r.id}">Message</button>`];
   if (canAccept) actions.push(`<button class="chip-btn" id="accept-${r.id}">Accept</button>`, `<button class="chip-btn danger" id="decline-${r.id}">Decline</button>`);
   if (canCancel) actions.push(`<button class="chip-btn danger" id="cancel-${r.id}">Cancel request</button>`);
   if (canComplete) actions.push(`<button class="chip-btn" id="complete-${r.id}">Mark completed</button>`);
+  if (canResolveDeposit) actions.push(
+    `<button class="chip-btn" id="return-clean-${r.id}">Confirm clean return</button>`,
+    `<button class="chip-btn danger" id="report-damage-${r.id}">Report damage</button>`
+  );
   if (r.status === "completed") actions.push(`<span id="review-slot-${r.id}"></span>`);
 
   return `<div class="manage-row" style="flex-wrap:wrap">
     <div class="manage-info">
       <h3><a href="product.html?id=${r.listingId}">${escapeHtml(title)}</a></h3>
       <div class="manage-meta">${fmtDate(r.startDate)} → ${fmtDate(r.endDate)} · $${r.totalPrice} total</div>
+      ${depositMetaLine(r, viewerRole)}
     </div>
     <span class="status-badge status-${r.status}">${r.status}</span>
     <div class="manage-actions">${actions.join("")}</div>
   </div>`;
+}
+
+function depositMetaLine(r, viewerRole) {
+  if (!r.depositAmount) return "";
+  if (r.depositStatus === "released") {
+    return `<div class="manage-meta">Deposit: $${r.depositAmount} — released, no issues reported</div>`;
+  }
+  if (r.depositStatus === "claimed") {
+    const contest = viewerRole === "renter"
+      ? ` · <a href="support.html" class="text-link">Think this is wrong? Contact support</a>`
+      : "";
+    return `<div class="manage-meta">Deposit: $${r.depositAmount} — $${r.claimedAmount} claimed (${escapeHtml(r.claimReason || "no reason given")})${contest}</div>`;
+  }
+  return `<div class="manage-meta">Deposit: $${r.depositAmount} — held until return is confirmed (owner has ${RETURN_GRACE_HOURS}h after the end date)</div>`;
 }
 
 async function wireReviewButton(r, viewerRole) {
@@ -186,6 +220,47 @@ async function wireReviewButton(r, viewerRole) {
 
   document.getElementById(`review-btn-${r.id}`).addEventListener("click", () => {
     openReviewDialog(r, targetUserId, existing);
+  });
+}
+
+function openDamageDialog(r) {
+  const overlay = document.createElement("div");
+  overlay.className = "review-overlay";
+  overlay.innerHTML = `
+    <div class="review-dialog">
+      <h3 style="margin:0 0 4px">Report damage</h3>
+      <p class="muted" style="margin:0 0 18px">This is applied automatically once you submit — there's no separate review step, so add enough detail and photos to back it up. Deposit available to claim: $${r.depositAmount}.</p>
+      <label style="font-weight:600;font-size:13px">Amount to claim (USD)<input id="claimAmount" type="number" min="0" max="${r.depositAmount}" step="1" style="width:100%;border:1px solid #ddd;border-radius:11px;padding:12px;margin-top:6px" value="${r.depositAmount}"></label>
+      <label style="font-weight:600;font-size:13px;display:block;margin-top:14px">What happened<textarea id="claimNote" rows="3" maxlength="500" style="width:100%;border:1px solid #ddd;border-radius:11px;padding:12px;margin-top:6px;font-family:inherit" placeholder="Describe the damage or issue"></textarea></label>
+      <label style="font-weight:600;font-size:13px;display:block;margin-top:14px">Photo URLs (comma-separated)<input id="claimPhotos" type="text" style="width:100%;border:1px solid #ddd;border-radius:11px;padding:12px;margin-top:6px" placeholder="https://example.com/damage.jpg"></label>
+      <p id="claimDialogError" class="auth-error hidden"></p>
+      <div style="display:flex;gap:10px;margin-top:18px">
+        <button class="primary-button" id="claimSubmit" style="flex:1">Submit claim</button>
+        <button class="chip-btn" id="claimCancel">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  overlay.querySelector("#claimCancel").addEventListener("click", () => overlay.remove());
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+
+  overlay.querySelector("#claimSubmit").addEventListener("click", async () => {
+    const errorBox = overlay.querySelector("#claimDialogError");
+    const amount = Number(overlay.querySelector("#claimAmount").value);
+    const note = overlay.querySelector("#claimNote").value.trim();
+    if (!amount || amount <= 0) { errorBox.textContent = "Enter an amount greater than $0."; errorBox.classList.remove("hidden"); return; }
+    if (amount > r.depositAmount) { errorBox.textContent = `Can't claim more than the $${r.depositAmount} deposit.`; errorBox.classList.remove("hidden"); return; }
+    if (!note) { errorBox.textContent = "Add a short description of what happened."; errorBox.classList.remove("hidden"); return; }
+
+    const photoUrls = overlay.querySelector("#claimPhotos").value.split(",").map(s => s.trim()).filter(Boolean);
+    try {
+      await reportDamageClaim(r.id, { amount, note, photoUrls });
+      overlay.remove();
+    } catch (err) {
+      console.error(err);
+      errorBox.textContent = "Couldn't submit the claim — open the browser console for the exact error. If it says permission-denied, firestore.rules likely needs to be redeployed.";
+      errorBox.classList.remove("hidden");
+    }
   });
 }
 

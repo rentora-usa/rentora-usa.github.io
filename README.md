@@ -2,11 +2,53 @@
 
 **Rent anything.**
 
-Rentora is a peer-to-peer rental marketplace running on a live Firebase backend: real authentication (email/password, Google, Apple), Firestore-backed listings and rentals, real-time messaging, a person-to-person star rating system, and a Discord-style staff support desk.
+Rentora is a peer-to-peer rental marketplace running on a live Firebase backend: real authentication (email/password, Google, Apple), Firestore-backed listings and rentals, real-time messaging, a person-to-person star rating system, a Discord-style staff support desk, and a deposit/damage-claim ledger awaiting a real payment backend.
 
 ---
 
-## 8. This round: two bug fixes + a staff support system
+## 9. This round: deposits, damage claims, and why payments aren't live yet
+
+**Short version: nothing charges real money yet, on purpose.** Payment operations (charges, deposit holds, refunds) require a secret key that can never live in frontend code — it has to run on a server you control. Rentora doesn't have one of those connected yet (no Stripe account, Firebase still on the free Spark plan, which can't make outbound API calls from Cloud Functions anyway). Building fake-but-convincing payment UI before that exists would risk misleading real users about their actual financial exposure, so instead this round builds the **decision layer**: everything that determines what *should* happen to a deposit, recorded correctly and ready to execute for real the moment a payment backend exists.
+
+### What's here now
+
+- **Listings can have a security deposit** (`create-listing.html` → "Security deposit"). It's shown to renters on the product page as "+$X refundable security deposit," with a clear note that Rentora doesn't hold or charge it yet.
+- **The deposit amount is locked in at booking time** and validated server-side against the listing (`firestore.rules`) — a renter can't quietly request with a lower deposit than the listing actually asks for.
+- **Resolution, from the owner's dashboard**, once a rental is accepted:
+  - **"Confirm clean return"** — releases the deposit (`depositStatus: "released"`), no claim.
+  - **"Report damage"** — the owner states an amount (capped at the deposit), a description, and photo URLs. Per your call, **this applies automatically as submitted — no staff review step.** `firestore.rules` still enforces the cap so an owner can never claim more than the deposit itself, and it's a one-shot transition (can't be re-claimed or reversed once resolved).
+  - **Automatic "never came back" rule** — if a rental is still `accepted` and the deposit still `pending` more than 48 hours (`RETURN_GRACE_HOURS` in `js/rentals.js`) past the end date, the full deposit is automatically claimed with that reason recorded.
+- **Renters see the outcome and reason** on their own dashboard, with a "Think this is wrong? Contact support" link straight into the ticket system — since claims aren't reviewed automatically, this is the actual recourse for now if an owner is being unreasonable.
+
+### The one real limitation: "automatic" currently means "client-triggered"
+
+The overdue rule runs inside `js/dashboard.js`, triggered whenever the *owner's* dashboard loads and calls `applyOverdueDepositRule()` in `js/rentals.js`. That's genuinely automatic in the sense that it's the same deterministic rule every time, not a judgment call — but it only fires when someone has the page open. There's no background job checking this while everyone's away, because that requires a **scheduled Cloud Function**, which requires the Blaze plan. Once that's set up, this exact rule moves into a real `onSchedule` function and runs whether anyone's looking or not — the client-side version can then be deleted.
+
+### When you're ready to connect real payments
+
+1. **Upgrade Firebase to Blaze** (Firebase Console → upgrade plan). Still free at low usage — you're billed only past a generous free tier — but required for Cloud Functions to call any external API.
+2. **Create a Stripe account**, and set up **Stripe Connect** (their marketplace product) so money can flow renter → Rentora → owner with a platform fee.
+3. I'll build the Cloud Functions layer: create a PaymentIntent (with manual capture, for deposits) when a request is accepted, capture/release it based on exactly the `depositStatus` decisions already being recorded now, and a webhook handler to keep Firestore in sync with what Stripe actually did.
+4. Talk to a lawyer before real strangers' money moves through this — marketplace payment handling has real regulatory dimensions (state money-transmission rules, 1099-K tax reporting for owners past certain volume) that are outside what I can advise on.
+
+### Data model additions
+
+```text
+listings/{id}             + depositAmount (number, 0 = no deposit)
+rentalRequests/{id}       + depositAmount (snapshotted from listing at booking)
+                          + returnDeadline (Timestamp = endDate + 48h)
+                          + returnedAt (Timestamp | null)
+                          + depositStatus ("n/a" | "pending" | "released" | "claimed")
+                          + claimedAmount (number, ≤ depositAmount)
+                          + claimReason (string)
+                          + claimPhotoUrls (string[])
+                          + claimedAt (Timestamp | null)
+```
+
+---
+
+## 8. Previous round: two bug fixes + a staff support system
+
 
 ### Bug fix — "the chat system doesn't work"
 
@@ -108,10 +150,13 @@ Firestore is schemaless — collections and documents are created implicitly on 
 ```text
 users/{uid}              displayName, email, photoURL, bio, location, createdAt
 listings/{listingId}     ownerId, ownerName, title, description, category, subcategory,
-                          pricePerDay, locationText, imageUrls[], rating, reviewCount,
-                          available, bookedRanges[{start,end}], createdAt, updatedAt
+                          pricePerDay, depositAmount, locationText, imageUrls[], rating,
+                          reviewCount, available, bookedRanges[{start,end}], createdAt, updatedAt
 rentalRequests/{id}      listingId, ownerId, renterId, startDate (Timestamp), endDate (Timestamp),
                           totalPrice, status (pending|accepted|declined|cancelled|completed),
+                          depositAmount, returnDeadline (Timestamp), returnedAt (Timestamp|null),
+                          depositStatus (n/a|pending|released|claimed), claimedAmount,
+                          claimReason, claimPhotoUrls[], claimedAt (Timestamp|null),
                           createdAt, updatedAt
 reviews/{id}              listingId, rentalRequestId, authorId, targetUserId, rating, text, createdAt
                           — doc id is "{rentalRequestId}_{authorId}"
@@ -162,7 +207,7 @@ js/
   auth.js                 Email/password + Google + Apple sign-in (login.html)
   header-auth.js          Account dropdown, unread badge, staff-admin link, fluid sign-in/out, page guards
   listings.js              Listings CRUD, booked-date ranges, conflict check
-  rentals.js                Rental request CRUD + real-time dashboard subscriptions
+  rentals.js                Rental request CRUD, real-time dashboard subscriptions, deposit ledger
   messages.js                Peer conversations + real-time messages (fixed this round — see §8)
   reviews.js                  Submit/fetch reviews, live average-rating computation
   support.js                  Support tickets: create, subscribe, reply, claim, staff profile
@@ -171,7 +216,7 @@ js/
   product.js                 Product page: request-to-rent, conflict check, message owner, owner rating
   create-listing.js          "List an item" form — also handles editing via ?id=
   settings.js                  Settings: profile editing, account info, sign out
-  dashboard.js                 Manage listings, live requests, accept/decline/review
+  dashboard.js                 Manage listings, live requests, accept/decline/review, deposit resolution
   profile.js                    Public profile: star rating + reviews + active listings
   messages-page.js              Peer messages: conversation list + thread
   support-page.js                End-user support: ticket list + new ticket + thread
@@ -186,12 +231,14 @@ Pages: index.html, about.html, search.html, product.html, login.html,
 
 ## 7. What to build next
 
-1. **Server-side booking transactions** — close the double-booking race described in §4 with a Cloud Function.
-2. **Direct photo uploads** to Storage instead of pasted URLs.
-3. **Payments** — Stripe Connect. Never process card numbers in the frontend.
-4. **Notifications** — for new messages/tickets/accepted requests. Real-time listeners already surface this live while someone's on the site; reaching them while they're away needs Cloud Functions + FCM or email.
-5. **Aggregate rating caching** — profiles compute the star average live from every review each time, which is honest but won't scale past a few hundred reviews per person. A Cloud Function trigger maintaining a cached `rating`/`reviewCount` on `users/{uid}` would fix that without reintroducing the "client could forge it" problem.
-6. **Ticket priority/categories**, file attachments, and staff notifications for the support desk.
+1. **Real payments** — Stripe Connect + Cloud Functions, executing the deposit decisions §9 already records. This is the big one; see §9 for the concrete steps when you're ready.
+2. **Server-side booking transactions** — close the double-booking race described in §4 with a Cloud Function (can likely ship alongside #1, same Blaze/Cloud Functions upgrade).
+3. **A real scheduled job for the overdue-deposit rule** — moves `applyOverdueDepositRule()` from "runs when the owner's dashboard loads" to a proper background job. Also needs Blaze.
+4. **Direct photo uploads** to Storage instead of pasted URLs (listing photos, damage-claim photos, profile/staff photos).
+5. **Notifications** — for new messages/tickets/accepted requests/deposit claims. Real-time listeners already surface this live while someone's on the site; reaching them while they're away needs Cloud Functions + FCM or email.
+6. **Aggregate rating caching** — profiles compute the star average live from every review each time, which is honest but won't scale past a few hundred reviews per person. A Cloud Function trigger maintaining a cached `rating`/`reviewCount` on `users/{uid}` would fix that without reintroducing the "client could forge it" problem.
+7. **Ticket priority/categories**, file attachments, and staff notifications for the support desk.
+8. **Revisit auto-approved damage claims once volume grows** — right now an owner's claim is applied as submitted, no review step, per your call. Worth reconsidering if disputes/chargebacks become common — the support-ticket contest path is the safety valve for now, not a formal review queue.
 
 ### Important architecture note
 
@@ -203,12 +250,13 @@ Never put Firebase **Admin SDK** credentials or a service-account JSON file in t
 
 - Homepage, search, filters, categories, product pages: working
 - Auth: email/password + Google + Apple, fluid dropdown sign-in/out
-- Listings: create/edit/hide/delete, working
+- Listings: create/edit/hide/delete, deposit amount, working
 - Rentals: request/accept/decline/cancel/complete, Timestamp dates, conflict check, working
-- Messaging: real-time, **fixed this round** (see §8)
-- Star ratings & reviews: person-to-person, live-computed, working — listing cards no longer show a fake rating
-- Staff support desk: new this round — tickets, live chat, staff identity, admin queue
-- Help Center: working, now links to Support
+- Deposits & damage claims: ledger layer working (see §9) — **no real money moves yet**, by design
+- Messaging: real-time, fixed a round ago (see §8)
+- Star ratings & reviews: person-to-person, live-computed, working — listing cards don't show a fake rating
+- Staff support desk: tickets, live chat, staff identity, admin queue, working
+- Help Center: working, links to Support
 - Settings, Dashboard: working
-- Firestore security rules: hardened, including the conversation existence-check fix and new staff/ticket rules — **redeploy them if you haven't since this round**
-- Photo uploads to Storage, server-side booking transactions, payments, notifications: not yet included
+- Firestore security rules: hardened, including deposit-resolution rules — **redeploy them, this round changed rentalRequests' rules again**
+- Photo uploads to Storage, real payments, server-side booking transactions, scheduled jobs, notifications: not yet included

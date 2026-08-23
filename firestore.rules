@@ -1,0 +1,296 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- shared helpers ----------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function onlyFieldsChanged(fields) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(fields);
+    }
+
+    function listingFor(id) {
+      return get(/databases/$(database)/documents/listings/$(id)).data;
+    }
+
+    function rentalRequestFor(id) {
+      return get(/databases/$(database)/documents/rentalRequests/$(id)).data;
+    }
+
+    function conversationParticipants(id) {
+      return get(/databases/$(database)/documents/conversations/$(id)).data.participants;
+    }
+
+    function ticketOwner(id) {
+      return get(/databases/$(database)/documents/supportTickets/$(id)).data.userId;
+    }
+
+    // Staff membership is provisioned manually in the Firebase console (a
+    // doc at staff/{uid}) — see README §8. exists() here does NOT require
+    // read permission on the staff collection, so this is safe to use as a
+    // gate even for people who aren't staff.
+    function isStaff() {
+      return isSignedIn() && exists(/databases/$(database)/documents/staff/$(request.auth.uid));
+    }
+
+    // A completed rental between the two people a review claims to be about,
+    // written by one of them, about the other. Used by /reviews below.
+    function isValidReviewParty() {
+      let rr = rentalRequestFor(request.resource.data.rentalRequestId);
+      return rr.status == "completed"
+        && ((rr.renterId == request.auth.uid && rr.ownerId == request.resource.data.targetUserId)
+            || (rr.ownerId == request.auth.uid && rr.renterId == request.resource.data.targetUserId));
+    }
+
+    // ---------- users/{uid} ----------
+    match /users/{userId} {
+      allow read: if true;
+
+      allow create: if isOwner(userId)
+                    && request.resource.data.email is string
+                    && request.resource.data.displayName is string
+                    && request.resource.data.displayName.size() > 0
+                    && request.resource.data.displayName.size() <= 80
+                    && request.resource.data.bio is string
+                    && request.resource.data.bio.size() <= 500;
+
+      // Email and createdAt are set once at signup and never editable afterward.
+      allow update: if isOwner(userId)
+                    && request.resource.data.email == resource.data.email
+                    && request.resource.data.createdAt == resource.data.createdAt
+                    && request.resource.data.displayName.size() <= 80
+                    && request.resource.data.bio.size() <= 500;
+
+      allow delete: if false;
+    }
+
+    // ---------- listings/{listingId} ----------
+    match /listings/{listingId} {
+      allow read: if true;
+
+      allow create: if isSignedIn()
+                    && request.resource.data.ownerId == request.auth.uid
+                    && request.resource.data.title is string
+                    && request.resource.data.title.size() > 0
+                    && request.resource.data.title.size() <= 120
+                    && request.resource.data.description is string
+                    && request.resource.data.description.size() <= 2000
+                    && request.resource.data.category is string
+                    && request.resource.data.pricePerDay is number
+                    && request.resource.data.pricePerDay > 0
+                    && request.resource.data.pricePerDay < 100000
+                    && request.resource.data.available is bool
+                    && request.resource.data.rating is number
+                    && request.resource.data.rating >= 0
+                    && request.resource.data.rating <= 5;
+
+      // Owner can edit their listing, but can't reassign it to someone else
+      // or forge a rating/review count for themselves.
+      allow update: if isSignedIn()
+                    && resource.data.ownerId == request.auth.uid
+                    && request.resource.data.ownerId == resource.data.ownerId
+                    && request.resource.data.rating == resource.data.rating
+                    && request.resource.data.reviewCount == resource.data.reviewCount
+                    && request.resource.data.pricePerDay is number
+                    && request.resource.data.pricePerDay > 0;
+
+      allow delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+    }
+
+    // ---------- rentalRequests/{requestId} ----------
+    match /rentalRequests/{requestId} {
+      allow create: if isSignedIn()
+                    && request.resource.data.renterId == request.auth.uid
+                    && request.resource.data.ownerId != request.auth.uid
+                    && request.resource.data.status == "pending"
+                    && request.resource.data.startDate is timestamp
+                    && request.resource.data.endDate is timestamp
+                    && request.resource.data.endDate > request.resource.data.startDate
+                    && request.resource.data.totalPrice is number
+                    && request.resource.data.totalPrice > 0
+                    // The listing must actually exist, be available, and really
+                    // belong to the ownerId the request claims — this stops a
+                    // forged request against a delisted item or the wrong owner.
+                    && listingFor(request.resource.data.listingId).available == true
+                    && listingFor(request.resource.data.listingId).ownerId == request.resource.data.ownerId
+                    // The deposit amount must match what the listing actually asks
+                    // for — otherwise a renter could self-declare a lower deposit
+                    // than the owner set, undermining the whole point of it.
+                    && request.resource.data.depositAmount == listingFor(request.resource.data.listingId).depositAmount
+                    && request.resource.data.returnDeadline is timestamp
+                    && request.resource.data.returnDeadline > request.resource.data.endDate
+                    && request.resource.data.depositStatus in ["n/a", "pending"];
+
+      allow read: if isSignedIn()
+                  && (resource.data.renterId == request.auth.uid
+                      || resource.data.ownerId == request.auth.uid);
+
+      // Owner may accept/decline/complete; renter may only cancel while pending.
+      // Either way, only the status (+ updatedAt) field can change.
+      allow update: if isSignedIn() && onlyFieldsChanged(["status", "updatedAt"]) && (
+                      (resource.data.ownerId == request.auth.uid
+                        && request.resource.data.status in ["accepted", "declined", "completed"])
+                      ||
+                      (resource.data.renterId == request.auth.uid
+                        && resource.data.status == "pending"
+                        && request.resource.data.status == "cancelled")
+                    );
+
+      // Deposit resolution — owner only, and only a one-shot transition out
+      // of "pending" (no re-claiming or reversing a decision once made).
+      // claimedAmount is capped at the deposit itself so the owner can never
+      // claim more than what was actually held. This covers both the manual
+      // "Confirm clean return" / "Report damage" actions and the automatic
+      // overdue rule in rentals.js#applyOverdueDepositRule.
+      allow update: if isSignedIn()
+                    && resource.data.ownerId == request.auth.uid
+                    && resource.data.depositStatus == "pending"
+                    && onlyFieldsChanged(["depositStatus", "claimedAmount", "claimReason", "claimPhotoUrls", "returnedAt", "claimedAt", "updatedAt"])
+                    && request.resource.data.depositStatus in ["released", "claimed"]
+                    && request.resource.data.claimedAmount is number
+                    && request.resource.data.claimedAmount >= 0
+                    && request.resource.data.claimedAmount <= resource.data.depositAmount
+                    && (request.resource.data.depositStatus == "released" ? request.resource.data.claimedAmount == 0 : true);
+
+      allow delete: if false;
+    }
+
+    // ---------- reviews/{reviewId} ----------
+    // Document id convention: "{rentalRequestId}_{authorId}" — enforced below,
+    // so each person gets exactly one review per completed rental; re-submitting
+    // the form edits it (an "update", not a duplicate "create"). Read is
+    // unconditionally public, which matters: it means checking whether a
+    // review already exists (getDoc on a possibly-nonexistent id) never hits
+    // a permission error the way a resource-gated read rule would.
+    match /reviews/{reviewId} {
+      allow read: if true;
+
+      allow create, update: if isSignedIn()
+                    && reviewId == request.resource.data.rentalRequestId + "_" + request.auth.uid
+                    && request.resource.data.authorId == request.auth.uid
+                    && request.resource.data.targetUserId != request.auth.uid
+                    && request.resource.data.rating is number
+                    && request.resource.data.rating >= 1
+                    && request.resource.data.rating <= 5
+                    && request.resource.data.text is string
+                    && request.resource.data.text.size() <= 1000
+                    && isValidReviewParty();
+
+      allow delete: if isSignedIn() && resource.data.authorId == request.auth.uid;
+    }
+
+    // ---------- conversations/{conversationId} ----------
+    // Document id convention: "{listingId}_{renterId}" — one thread per
+    // listing/renter pair.
+    //
+    // IMPORTANT: read is allowed either when the document doesn't exist yet
+    // OR when the requester is a participant. Without the "resource == null"
+    // clause, checking whether a conversation already exists (a plain
+    // getDoc before creating one) is denied outright for a brand-new
+    // conversation, because there's no resource.data to test the requester
+    // against — Firestore doesn't special-case "not found" here, it just
+    // evaluates the rule as false. That was the actual bug behind chat not
+    // working. The client no longer does that existence check (see
+    // messages.js), but the rule is defensive here too in case anything
+    // else ever reads a conversation the same way.
+    match /conversations/{conversationId} {
+      allow read: if isSignedIn()
+                  && (resource == null || request.auth.uid in resource.data.participants);
+
+      allow create: if isSignedIn()
+                    && request.auth.uid in request.resource.data.participants
+                    && request.resource.data.participants.size() == 2
+                    && request.resource.data.ownerId in request.resource.data.participants
+                    && request.resource.data.renterId in request.resource.data.participants;
+
+      // Participants can only touch metadata (last-message preview, their own
+      // read receipt) — the participant list itself is immutable after create.
+      allow update: if isSignedIn()
+                    && request.auth.uid in resource.data.participants
+                    && request.resource.data.participants == resource.data.participants
+                    && onlyFieldsChanged(["lastMessage", "lastMessageAt", "lastSenderId", "lastRead"]);
+
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if isSignedIn()
+                    && request.auth.uid in conversationParticipants(conversationId);
+
+        allow create: if isSignedIn()
+                    && request.resource.data.senderId == request.auth.uid
+                    && request.auth.uid in conversationParticipants(conversationId)
+                    && request.resource.data.text is string
+                    && request.resource.data.text.size() > 0
+                    && request.resource.data.text.size() <= 2000;
+
+        allow update, delete: if false;
+      }
+    }
+
+    // ---------- staff/{uid} ----------
+    // Who counts as staff. There is deliberately NO client path to create
+    // this document — it must be added by hand in the Firebase console by
+    // whoever runs the project. Once it exists, that person can edit their
+    // own support display name/photo, but never grant themselves (or
+    // anyone else) staff status through the app.
+    match /staff/{uid} {
+      allow read: if isSignedIn();
+      allow create: if false;
+      allow update: if isSignedIn() && request.auth.uid == uid
+                    && request.resource.data.displayName is string
+                    && request.resource.data.displayName.size() > 0
+                    && request.resource.data.displayName.size() <= 80;
+      allow delete: if false;
+    }
+
+    // ---------- supportTickets/{ticketId} ----------
+    match /supportTickets/{ticketId} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isStaff());
+
+      allow create: if isSignedIn()
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.status == "open"
+                    && request.resource.data.subject is string
+                    && request.resource.data.subject.size() > 0
+                    && request.resource.data.subject.size() <= 150;
+
+      // The person who opened it can close/reopen it and update the preview
+      // fields (sending a message touches those). Staff can additionally
+      // claim it (assignedStaffId/Name) and close/reopen it themselves.
+      allow update: if isSignedIn() && (
+                      (resource.data.userId == request.auth.uid
+                        && onlyFieldsChanged(["status", "lastMessage", "lastMessageAt", "lastSenderId"])
+                        && request.resource.data.status in ["open", "closed"])
+                      ||
+                      (isStaff()
+                        && onlyFieldsChanged(["status", "assignedStaffId", "assignedStaffName", "lastMessage", "lastMessageAt", "lastSenderId"])
+                        && request.resource.data.status in ["open", "closed"])
+                    );
+
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if isSignedIn() && (ticketOwner(ticketId) == request.auth.uid || isStaff());
+
+        allow create: if isSignedIn()
+                      && request.resource.data.senderId == request.auth.uid
+                      && request.resource.data.text is string
+                      && request.resource.data.text.size() > 0
+                      && request.resource.data.text.size() <= 2000
+                      && (
+                        (ticketOwner(ticketId) == request.auth.uid && request.resource.data.senderRole == "user")
+                        || (isStaff() && request.resource.data.senderRole == "staff")
+                      );
+
+        allow update, delete: if false;
+      }
+    }
+  }
+}

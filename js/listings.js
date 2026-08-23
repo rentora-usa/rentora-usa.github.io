@@ -43,6 +43,7 @@ export async function createListing(data) {
     category: data.category,
     subcategory: data.subcategory,
     pricePerDay: data.pricePerDay,
+    depositAmount: data.depositAmount || 0,
     locationText: data.locationText,
     imageUrls: data.imageUrls || [],
     ownerId: user.uid,
