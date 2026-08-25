@@ -1,0 +1,21 @@
+name = "rentora-payments"
+main = "src/worker.js"
+compatibility_date = "2024-11-01"
+
+[vars]
+FIREBASE_PROJECT_ID = "rentora-415ca"
+FIREBASE_API_KEY = "AIzaSyDqQwTspDeEpf8nAXt3AP04v8Phn-e5kJQ"
+# "*" works for getting this running, but once you know your real site's
+# origin (e.g. https://yourname.github.io), set it here so random sites
+# can't call your Worker.
+ALLOWED_ORIGIN = "*"
+
+# Secrets — never put these here. Set them with:
+#   wrangler secret put STRIPE_SECRET_KEY
+#   wrangler secret put FIREBASE_SERVICE_ACCOUNT_JSON
+#
+# STRIPE_SECRET_KEY               your Stripe TEST secret key (starts sk_test_)
+# FIREBASE_SERVICE_ACCOUNT_JSON   the full contents of a Firebase service
+#                                 account key JSON file, pasted as one line
+#                                 (Firebase Console -> Project settings ->
+#                                 Service accounts -> Generate new private key)

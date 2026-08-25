@@ -20,27 +20,73 @@ onAuthStateChanged(auth, (user) => {
   if (!user) return; // header-auth.js already redirects signed-out visitors here
   currentUid = user.uid;
   subscribeMyTickets(user.uid, renderList);
-});
 
-document.getElementById("newTicketBtn").addEventListener("click", async () => {
-  const subject = prompt("What's this about? (a short subject line)");
-  if (!subject || !subject.trim()) return;
-  const message = prompt("Describe the issue — support will reply here.");
-  if (!message || !message.trim()) return;
-  try {
-    const id = await createTicket(subject, message);
-    activeId = id;
-    history.replaceState(null, "", `support.html?t=${id}`);
-  } catch (err) {
-    console.error(err);
-    alert("Couldn't open a ticket. Try again.");
+  // Deep link from the Help Center's "Open a ticket" button.
+  if (new URLSearchParams(location.search).get("new") === "1") {
+    openNewTicketDialog();
   }
 });
+
+document.getElementById("newTicketBtn").addEventListener("click", openNewTicketDialog);
+
+function openNewTicketDialog() {
+  const overlay = document.createElement("div");
+  overlay.className = "review-overlay";
+  overlay.innerHTML = `
+    <div class="review-dialog">
+      <h3 style="margin:0 0 4px">Open a ticket</h3>
+      <p class="muted" style="margin:0 0 18px">Tell us what's going on — a real person will reply here.</p>
+      <label style="font-weight:600;font-size:13px">Subject<input id="ticketSubject" type="text" maxlength="150" style="width:100%;border:1px solid #ddd;border-radius:11px;padding:12px;margin-top:6px" placeholder="A short summary"></label>
+      <label style="font-weight:600;font-size:13px;display:block;margin-top:14px">What's going on?<textarea id="ticketMessage" rows="5" maxlength="2000" style="width:100%;border:1px solid #ddd;border-radius:11px;padding:12px;margin-top:6px;font-family:inherit" placeholder="Include any details that would help — a listing, a rental, another person's name..."></textarea></label>
+      <p id="ticketDialogError" class="auth-error hidden"></p>
+      <div style="display:flex;gap:10px;margin-top:18px">
+        <button class="primary-button" id="ticketSubmit" style="flex:1">Open ticket</button>
+        <button class="chip-btn" id="ticketCancel">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector("#ticketSubject").focus();
+
+  const close = () => {
+    overlay.remove();
+    // Drop the ?new=1 param so refreshing doesn't reopen the dialog.
+    const url = new URL(location.href);
+    url.searchParams.delete("new");
+    history.replaceState(null, "", url.pathname + url.search);
+  };
+
+  overlay.querySelector("#ticketCancel").addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+  overlay.querySelector("#ticketSubmit").addEventListener("click", async () => {
+    const errorBox = overlay.querySelector("#ticketDialogError");
+    const submitBtn = overlay.querySelector("#ticketSubmit");
+    const subject = overlay.querySelector("#ticketSubject").value.trim();
+    const message = overlay.querySelector("#ticketMessage").value.trim();
+    if (!subject) { errorBox.textContent = "Give it a short subject line."; errorBox.classList.remove("hidden"); return; }
+    if (!message) { errorBox.textContent = "Add a bit of detail so we know what's going on."; errorBox.classList.remove("hidden"); return; }
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Opening…";
+    try {
+      const id = await createTicket(subject, message);
+      activeId = id;
+      close();
+      history.replaceState(null, "", `support.html?t=${id}`);
+    } catch (err) {
+      console.error(err);
+      errorBox.textContent = "Couldn't open the ticket. Try again.";
+      errorBox.classList.remove("hidden");
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Open ticket";
+    }
+  });
+}
 
 function renderList(items) {
   tickets = items;
   if (!items.length) {
-    listEl.innerHTML = `<p class="state-message">No tickets yet. Click "New ticket" if you need a hand.</p>`;
+    listEl.innerHTML = `<div class="empty-thread" style="padding:40px 16px"><div class="empty-thread-icon">🎫</div><p>No tickets yet.</p></div>`;
     return;
   }
   if (!activeId) activeId = items[0].id;
@@ -109,6 +155,6 @@ function renderMessages(messages) {
   el.innerHTML = messages.map(m => `
     ${m.senderId !== currentUid ? `<div class="thread-sender-name">${escapeHtml(m.senderName || "Support")}</div>` : ""}
     <div class="thread-bubble ${m.senderId === currentUid ? "mine" : ""}">${escapeHtml(m.text)}</div>
-  `).join("") || `<p class="state-message">Tell us what's going on — we'll get back to you here.</p>`;
+  `).join("") || `<div class="empty-thread" style="padding:30px 16px"><p>Tell us what's going on — we'll get back to you here.</p></div>`;
   el.scrollTop = el.scrollHeight;
 }

@@ -147,7 +147,7 @@ async function renderRequests(elId, items, viewerRole) {
     if (viewerRole === "owner" && r.depositAmount > 0 && r.depositStatus === "pending" && (r.status === "accepted" || r.status === "completed")) {
       document.getElementById(`return-clean-${r.id}`)?.addEventListener("click", async (e) => {
         e.target.disabled = true;
-        try { await confirmCleanReturn(r.id); }
+        try { await confirmCleanReturn(r); }
         catch (err) { console.error(err); e.target.disabled = false; }
       });
       document.getElementById(`report-damage-${r.id}`)?.addEventListener("click", () => openDamageDialog(r));
@@ -197,16 +197,22 @@ async function requestRow(r, viewerRole) {
 
 function depositMetaLine(r, viewerRole) {
   if (!r.depositAmount) return "";
+  const isReal = !!r.depositPaymentIntentId;
+
   if (r.depositStatus === "released") {
-    return `<div class="manage-meta">Deposit: $${r.depositAmount} — released, no issues reported</div>`;
+    return `<div class="manage-meta">Deposit: $${r.depositAmount} — released${isReal ? " (card hold canceled, nothing charged)" : ", no issues reported"}</div>`;
   }
-  if (r.depositStatus === "claimed") {
+  if (r.depositStatus === "claimed" || r.depositStatus === "captured") {
     const contest = viewerRole === "renter"
       ? ` · <a href="support.html" class="text-link">Think this is wrong? Contact support</a>`
       : "";
-    return `<div class="manage-meta">Deposit: $${r.depositAmount} — $${r.claimedAmount} claimed (${escapeHtml(r.claimReason || "no reason given")})${contest}</div>`;
+    const verb = r.depositStatus === "captured" ? "charged" : "claimed";
+    return `<div class="manage-meta">Deposit: $${r.depositAmount} — $${r.claimedAmount} ${verb} (${escapeHtml(r.claimReason || "no reason given")})${contest}</div>`;
   }
-  return `<div class="manage-meta">Deposit: $${r.depositAmount} — held until return is confirmed (owner has ${RETURN_GRACE_HOURS}h after the end date)</div>`;
+  if (r.depositStatus === "authorized") {
+    return `<div class="manage-meta">Deposit: $${r.depositAmount} — card authorized (not charged) until return is confirmed, owner has ${RETURN_GRACE_HOURS}h after the end date</div>`;
+  }
+  return `<div class="manage-meta">Deposit: $${r.depositAmount} — held until return is confirmed (owner has ${RETURN_GRACE_HOURS}h after the end date). Not charged yet — payments aren't fully connected.</div>`;
 }
 
 async function wireReviewButton(r, viewerRole) {
@@ -254,7 +260,7 @@ function openDamageDialog(r) {
 
     const photoUrls = overlay.querySelector("#claimPhotos").value.split(",").map(s => s.trim()).filter(Boolean);
     try {
-      await reportDamageClaim(r.id, { amount, note, photoUrls });
+      await reportDamageClaim(r, { amount, note, photoUrls });
       overlay.remove();
     } catch (err) {
       console.error(err);

@@ -86,6 +86,9 @@ service cloud.firestore {
                     && request.resource.data.pricePerDay is number
                     && request.resource.data.pricePerDay > 0
                     && request.resource.data.pricePerDay < 100000
+                    && request.resource.data.depositAmount is number
+                    && request.resource.data.depositAmount >= 0
+                    && request.resource.data.depositAmount < 100000
                     && request.resource.data.available is bool
                     && request.resource.data.rating is number
                     && request.resource.data.rating >= 0
@@ -99,7 +102,9 @@ service cloud.firestore {
                     && request.resource.data.rating == resource.data.rating
                     && request.resource.data.reviewCount == resource.data.reviewCount
                     && request.resource.data.pricePerDay is number
-                    && request.resource.data.pricePerDay > 0;
+                    && request.resource.data.pricePerDay > 0
+                    && request.resource.data.depositAmount is number
+                    && request.resource.data.depositAmount >= 0;
 
       allow delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
     }
@@ -246,7 +251,9 @@ service cloud.firestore {
       allow update: if isSignedIn() && request.auth.uid == uid
                     && request.resource.data.displayName is string
                     && request.resource.data.displayName.size() > 0
-                    && request.resource.data.displayName.size() <= 80;
+                    && request.resource.data.displayName.size() <= 80
+                    && request.resource.data.photoURL is string
+                    && request.resource.data.photoURL.size() <= 500;
       allow delete: if false;
     }
 

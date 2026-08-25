@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Messages | Rentora</title><link rel="stylesheet" href="css/styles.css">
+  <title>Messages | Rentora</title>  <link rel="icon" type="image/png" sizes="32x32" href="img/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="img/favicon-512.png">
+  <link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+  <link rel="stylesheet" href="css/styles.css">
 </head>
 <body class="auth-pending">
 <header class="site-header">
@@ -26,7 +29,11 @@
       <p class="state-message">Loading conversations…</p>
     </aside>
     <section class="thread-panel" id="threadPanel">
-      <div class="state-message">Pick a conversation to see the messages.</div>
+      <div class="empty-thread">
+        <div class="empty-thread-icon">💬</div>
+        <h3>No conversation selected</h3>
+        <p>Pick one from the list to see the messages.</p>
+      </div>
     </section>
   </div>
 </main>
