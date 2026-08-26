@@ -6,6 +6,41 @@ Rentora is a peer-to-peer rental marketplace running on a live Firebase backend:
 
 ---
 
+## 12. This round: ticket lifecycle tracker, Shift+Enter, and a status page
+
+### Support tickets now have a real 5-stage lifecycle
+
+Tickets used to just be open/closed. They now move through **Received → Read → In Progress → Resolved → Closed**, shown as a circle/line tracker (like a package-tracking UI) at the top of the thread on both `support.html` and `admin.html`:
+
+- **Received** — the moment a ticket is created.
+- **Read** — set automatically the first time a staff member opens it. No button, no manual step.
+- **In Progress** — set automatically the first time staff actually reply. Staff can also jump here manually (a "Mark in progress" button) without waiting for that.
+- **Resolved** — staff-only, manual ("Mark resolved").
+- **Closed** — either side can close it. **Closed is enforced as a hard stop in `firestore.rules`, not just hidden in the UI** — nobody, staff included, can post another message into a closed ticket via any path until it's reopened. Reopening (either side can do it) resets it to "Received," so it gets re-triaged rather than picking up wherever it left off.
+
+`js/support.js` has the full state machine (`TICKET_STAGES`, `markTicketRead`, `setTicketStage`, `closeTicket`, `reopenTicket`); `firestore.rules`' `supportTickets` block enforces who can move it where — staff have full control across all 5 stages, the ticket owner can only close or reopen.
+
+### Shift+Enter for multi-line replies
+
+Both `support-page.js` (user side) and `admin.js` (staff side) now use an auto-growing `<textarea>` for the composer instead of a single-line input: **Enter sends, Shift+Enter inserts a line break.** Line breaks render correctly in the message bubbles on both sides.
+
+### A status page, Discord-style
+
+- **`status.html`** — public, no login needed. A banner ("All systems operational" / degraded / partial or major outage, computed from the worst component status live), a list of components with colored status pills, and an incident history below each with its own timestamped update timeline.
+- **Admin panel → Status Page tab** — staff can add/rename/delete components, change any component's status via a dropdown, and post incidents. Each incident starts with a title + impact level + initial update, and staff can post further updates (changing status through investigating → identified → monitoring → resolved) — all Discord-style, one incident accumulating a timeline rather than separate posts.
+- Public read, staff-only write — same pattern as everything else (`isStaff()` in `firestore.rules`).
+
+### Data model additions
+
+```text
+supportTickets/{id}     status is now received|read|in_progress|resolved|closed (was open|closed)
+statusComponents/{id}    name, status (operational|degraded|partial_outage|major_outage), order, updatedAt
+statusIncidents/{id}     title, impact (minor|major|critical), status (investigating|identified|monitoring|resolved),
+                         updates[{status, message, createdAt}], createdAt, updatedAt, resolvedAt
+```
+
+---
+
 ## 11. This round: staff account management, listing moderation, and pickup/return photos
 
 Three additions, all staff-facing:
@@ -229,11 +264,19 @@ conversations/{id}        listingId, listingTitle, ownerId, renterId, participan
                           — doc id is "{listingId}_{renterId}"
   /messages/{messageId}    senderId, text, createdAt
 staff/{uid}                displayName, photoURL — see §8, created manually
-supportTickets/{id}        userId, userName, subject, status, assignedStaffId,
-                          assignedStaffName, lastMessage, lastMessageAt, lastSenderId, createdAt
+supportTickets/{id}        userId, userName, subject,
+                          status (received|read|in_progress|resolved|closed — see §12),
+                          assignedStaffId, assignedStaffName, lastMessage, lastMessageAt,
+                          lastSenderId, createdAt
   /messages/{messageId}    senderId, senderRole, senderName, text, createdAt
 adminAuditLog/{id}          staffId, staffName, action, targetType, targetId, details, createdAt
                           — staff-readable, append-only, see §11
+statusComponents/{id}        name, status (operational|degraded|partial_outage|major_outage),
+                          order, updatedAt — public read, staff write, see §12
+statusIncidents/{id}         title, impact (minor|major|critical),
+                          status (investigating|identified|monitoring|resolved),
+                          updates[{status, message, createdAt}], createdAt, updatedAt,
+                          resolvedAt — public read, staff write, see §12
 ```
 
 ### Renting: fluid and secured, with one honest gap
@@ -277,7 +320,8 @@ js/
   rentals.js                Rental request CRUD, real-time subscriptions, deposit ledger, pickup/return photos
   messages.js                Peer conversations + real-time messages
   reviews.js                  Submit/fetch reviews, live average-rating computation
-  support.js                  Support tickets: create, subscribe, reply, claim, staff profile
+  support.js                  Support tickets: 5-stage lifecycle, subscribe, reply, claim, staff profile
+  status.js                     Status page data: components + incidents (public read, staff write)
   payments.js                  Client for payments-worker/ (optional — see §10)
   payments-config.js            PAYMENTS_WORKER_URL / STRIPE_PUBLISHABLE_KEY (optional)
   admin-users.js                Client for admin-worker/ — user account management
@@ -291,16 +335,17 @@ js/
   dashboard.js                 Manage listings, live requests, accept/decline/review, deposit + photo docs
   profile.js                    Public profile: star rating + reviews + active listings
   messages-page.js              Peer messages: conversation list + thread
-  support-page.js                End-user support: ticket list + new ticket + thread
-  help.js                         Help Center: home/category/article/search views
-  admin.js                        Staff admin panel: Tickets / Users / Listings sections
+  support-page.js                End-user support: ticket list, stage tracker, Shift+Enter composer
+  status-page.js                  Public status page: banner + components + incident history
+  help.js                           Help Center: home/category/article/search views
+  admin.js                          Staff admin panel: Tickets / Users / Listings / Status Page sections
 
 payments-worker/    Optional Cloudflare Worker for real Stripe test-mode deposit holds — see §10
 admin-worker/       Cloudflare Worker for staff user-account management — see §11
 
 Pages: index.html, about.html, search.html, product.html, login.html,
        create-listing.html, settings.html, dashboard.html, messages.html,
-       profile.html, help.html, support.html, admin.html, 404.html
+       profile.html, help.html, support.html, admin.html, status.html, 404.html
 ```
 
 ---
@@ -317,6 +362,7 @@ Pages: index.html, about.html, search.html, product.html, login.html,
 8. **Revisit auto-approved damage claims once volume grows** — right now an owner's claim is applied as submitted, no review step, per an earlier call. Worth reconsidering if disputes/chargebacks become common — the support-ticket contest path is the safety valve for now, not a formal review queue.
 9. **Clean up Firestore data when an account is deleted** — `admin-worker/`'s delete-account action removes the Firebase Auth login only; their listings, reviews, and messages stay behind. Fine for now, but worth a real answer (anonymize vs. cascade-delete) before this handles real users at scale.
 10. **Paginate the Users/Listings tabs** — both currently load in one page-sized batch; fine for a small marketplace, will need real pagination UI once either collection grows past a few hundred.
+11. **Automatic component status** — right now every component's status is set by hand from the admin panel. A more advanced version could derive it from real health checks (uptime pings, error-rate thresholds) via a scheduled Cloud Function, with manual override staying available for planned maintenance.
 
 ### Important architecture note
 
@@ -332,12 +378,13 @@ Never put Firebase **Admin SDK** credentials or a service-account JSON file in t
 - Rentals: request/accept/decline/cancel/complete, Timestamp dates, conflict check, working
 - Deposits & damage claims: ledger layer working (see §9), optional real Stripe test-mode holds available but not fully wired up (see §10) — **no real money moves by default**
 - Pickup/return condition photos: working, alongside existing damage-claim photos
-- Messaging: real-time, working
+- Messaging: real-time, working, Shift+Enter for new lines
 - Star ratings & reviews: person-to-person, live-computed, working — listing cards don't show a fake rating
-- Staff support desk: tickets, live chat, staff identity, working
-- Staff user management: browse/search accounts, disable/enable, force sign-out, password reset email, delete — **new this round**, needs `admin-worker/` deployed
+- Staff support desk: 5-stage ticket lifecycle with a visual tracker, live chat with Shift+Enter, staff identity, working — **closed tickets are locked in `firestore.rules`, not just the UI**
+- Status page: public `status.html` with live component status + incident history, fully staff-editable from `admin.html` — **new this round**
+- Staff user management: browse/search accounts, disable/enable, force sign-out, password reset email, delete — needs `admin-worker/` deployed
 - Staff audit log: working, staff-readable
 - Help Center: working, links to Support
 - Settings, Dashboard: working
-- Firestore security rules: hardened, including staff listing/rental access and pickup/return photo rules — **redeploy them, this round changed the rules again**
+- Firestore security rules: hardened, including the ticket lifecycle rewrite and new status-page collections — **redeploy them, this round changed the rules again**
 - Photo uploads to Storage (still URL-based everywhere), real payments end-to-end, server-side booking transactions, scheduled jobs, notifications, Firestore cleanup on account deletion: not yet included

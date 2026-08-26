@@ -40,6 +40,17 @@ service cloud.firestore {
       return isSignedIn() && exists(/databases/$(database)/documents/staff/$(request.auth.uid));
     }
 
+    // Whether the caller is allowed to post a message into a given ticket
+    // right now — the ticket owner posting as "user", or staff posting as
+    // "staff", and never into a closed ticket (that's the actual
+    // enforcement behind "closed tickets can't be chatted in" — the UI
+    // hiding the composer is just a courtesy on top of this).
+    function canPostToTicket(id, senderRole) {
+      let t = get(/databases/$(database)/documents/supportTickets/$(id)).data;
+      return t.status != "closed"
+        && ((t.userId == request.auth.uid && senderRole == "user") || (isStaff() && senderRole == "staff"));
+    }
+
     // A completed rental between the two people a review claims to be about,
     // written by one of them, about the other. Used by /reviews below.
     function isValidReviewParty() {
@@ -274,27 +285,36 @@ service cloud.firestore {
     }
 
     // ---------- supportTickets/{ticketId} ----------
+    // Status is a 5-stage lifecycle now, not just open/closed:
+    //   received -> read -> in_progress -> resolved -> closed
+    // Staff have full forward/back control among all 5 (the UI mostly moves
+    // it forward automatically — see support.js — but a human can always
+    // override). The ticket owner can only do two things: close it (from
+    // any non-closed stage) or reopen it (closed -> received, a fresh
+    // cycle). Closed is a hard stop for messaging, enforced below in the
+    // messages subcollection's create rule, not just in the UI.
     match /supportTickets/{ticketId} {
       allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isStaff());
 
       allow create: if isSignedIn()
                     && request.resource.data.userId == request.auth.uid
-                    && request.resource.data.status == "open"
+                    && request.resource.data.status == "received"
                     && request.resource.data.subject is string
                     && request.resource.data.subject.size() > 0
                     && request.resource.data.subject.size() <= 150;
 
-      // The person who opened it can close/reopen it and update the preview
-      // fields (sending a message touches those). Staff can additionally
-      // claim it (assignedStaffId/Name) and close/reopen it themselves.
       allow update: if isSignedIn() && (
                       (resource.data.userId == request.auth.uid
                         && onlyFieldsChanged(["status", "lastMessage", "lastMessageAt", "lastSenderId"])
-                        && request.resource.data.status in ["open", "closed"])
+                        && (
+                          request.resource.data.status == resource.data.status
+                          || (resource.data.status != "closed" && request.resource.data.status == "closed")
+                          || (resource.data.status == "closed" && request.resource.data.status == "received")
+                        ))
                       ||
                       (isStaff()
                         && onlyFieldsChanged(["status", "assignedStaffId", "assignedStaffName", "lastMessage", "lastMessageAt", "lastSenderId"])
-                        && request.resource.data.status in ["open", "closed"])
+                        && request.resource.data.status in ["received", "read", "in_progress", "resolved", "closed"])
                     );
 
       allow delete: if false;
@@ -307,10 +327,7 @@ service cloud.firestore {
                       && request.resource.data.text is string
                       && request.resource.data.text.size() > 0
                       && request.resource.data.text.size() <= 2000
-                      && (
-                        (ticketOwner(ticketId) == request.auth.uid && request.resource.data.senderRole == "user")
-                        || (isStaff() && request.resource.data.senderRole == "staff")
-                      );
+                      && canPostToTicket(ticketId, request.resource.data.senderRole);
 
         allow update, delete: if false;
       }
@@ -332,6 +349,41 @@ service cloud.firestore {
                     && request.resource.data.targetType is string
                     && request.resource.data.targetId is string;
       allow update, delete: if false;
+    }
+
+    // ---------- statusComponents/{componentId} ----------
+    // The individual rows on the public status page (e.g. "Website",
+    // "Messaging", "Payments"). Public read so anyone can check status
+    // without an account; staff-only write.
+    match /statusComponents/{componentId} {
+      allow read: if true;
+      allow create, update: if isStaff()
+                    && request.resource.data.name is string
+                    && request.resource.data.name.size() > 0
+                    && request.resource.data.name.size() <= 80
+                    && request.resource.data.status in ["operational", "degraded", "partial_outage", "major_outage"]
+                    && request.resource.data.order is number;
+      allow delete: if isStaff();
+    }
+
+    // ---------- statusIncidents/{incidentId} ----------
+    // Discord-style incident log: a title/impact plus a timestamped list of
+    // updates (each with its own status — investigating/identified/
+    // monitoring/resolved). Public read, staff-only write. The `updates`
+    // array is written wholesale on each edit (append client-side, then
+    // send the whole array) rather than as a subcollection, since incident
+    // update counts are small and this keeps the read simple for the
+    // public page.
+    match /statusIncidents/{incidentId} {
+      allow read: if true;
+      allow create, update: if isStaff()
+                    && request.resource.data.title is string
+                    && request.resource.data.title.size() > 0
+                    && request.resource.data.title.size() <= 150
+                    && request.resource.data.impact in ["minor", "major", "critical"]
+                    && request.resource.data.status in ["investigating", "identified", "monitoring", "resolved"]
+                    && request.resource.data.updates is list;
+      allow delete: if isStaff();
     }
   }
 }

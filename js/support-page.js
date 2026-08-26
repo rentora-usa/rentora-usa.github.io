@@ -2,7 +2,7 @@ import { auth } from "./firebase.js";
 import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
 import {
   createTicket, subscribeMyTickets, subscribeTicketMessages,
-  sendTicketMessage, setTicketStatus
+  sendTicketMessage, closeTicket, reopenTicket, TICKET_STAGES
 } from "./support.js";
 
 const listEl = document.getElementById("ticketList");
@@ -16,12 +16,20 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+function renderStageTracker(status) {
+  const idx = TICKET_STAGES.findIndex(s => s.id === status);
+  return `<div class="stage-tracker">${TICKET_STAGES.map((s, i) => {
+    const state = i < idx ? "done" : i === idx ? "done active" : "";
+    const line = i < TICKET_STAGES.length - 1 ? `<div class="stage-line ${i < idx ? "done" : ""}"></div>` : "";
+    return `<div class="stage-step ${state}"><span class="stage-dot"></span><span class="stage-label">${s.label}</span></div>${line}`;
+  }).join("")}</div>`;
+}
+
 onAuthStateChanged(auth, (user) => {
   if (!user) return; // header-auth.js already redirects signed-out visitors here
   currentUid = user.uid;
   subscribeMyTickets(user.uid, renderList);
 
-  // Deep link from the Help Center's "Open a ticket" button.
   if (new URLSearchParams(location.search).get("new") === "1") {
     openNewTicketDialog();
   }
@@ -49,7 +57,6 @@ function openNewTicketDialog() {
 
   const close = () => {
     overlay.remove();
-    // Drop the ?new=1 param so refreshing doesn't reopen the dialog.
     const url = new URL(location.href);
     url.searchParams.delete("new");
     history.replaceState(null, "", url.pathname + url.search);
@@ -95,7 +102,7 @@ function renderList(items) {
     <button type="button" class="conversation-row ${t.id === activeId ? "active" : ""}" data-id="${t.id}">
       <div class="conversation-row-top">
         <span class="conversation-title">${escapeHtml(t.subject)}</span>
-        <span class="status-badge status-${t.status}" style="font-size:9px">${t.status}</span>
+        <span class="status-badge status-${t.status}" style="font-size:9px">${escapeHtml((TICKET_STAGES.find(s => s.id === t.status) || {}).label || t.status)}</span>
       </div>
       <div class="conversation-preview">${escapeHtml(t.lastMessage || "No messages yet")}</div>
     </button>`).join("");
@@ -116,6 +123,7 @@ function openTicket(id, silent) {
 
   const ticket = tickets.find(t => t.id === id);
   if (!ticket) return;
+  const isClosed = ticket.status === "closed";
 
   threadEl.innerHTML = `
     <div class="thread-header" style="display:flex;justify-content:space-between;align-items:center">
@@ -123,28 +131,58 @@ function openTicket(id, silent) {
         <strong>${escapeHtml(ticket.subject)}</strong>
         <div class="listing-meta">${ticket.assignedStaffName ? `Assigned to ${escapeHtml(ticket.assignedStaffName)}` : "Waiting for a support agent"}</div>
       </div>
-      <button class="chip-btn" id="toggleStatusBtn">${ticket.status === "open" ? "Close ticket" : "Reopen"}</button>
+      ${!isClosed ? `<button class="chip-btn" id="closeBtn">Close ticket</button>` : ""}
     </div>
+    ${renderStageTracker(ticket.status)}
     <div class="thread-messages" id="threadMessages"><p class="state-message">Loading messages…</p></div>
-    <form class="thread-composer" id="composerForm">
-      <input id="composerInput" type="text" placeholder="Reply to support…" autocomplete="off" maxlength="2000" required>
-      <button class="primary-button" type="submit">Send</button>
-    </form>`;
+    ${isClosed ? `
+      <div class="ticket-closed-banner">
+        <span>This ticket is closed. Reopen it if you need to add anything else.</span>
+        <button class="chip-btn" id="reopenBtn">Reopen ticket</button>
+      </div>
+    ` : `
+      <form class="thread-composer" id="composerForm">
+        <textarea id="composerInput" rows="1" placeholder="Reply to support…" maxlength="2000" required></textarea>
+        <button class="primary-button" type="submit">Send</button>
+      </form>
+      <div class="composer-hint">Enter to send · Shift+Enter for a new line</div>
+    `}`;
 
-  document.getElementById("toggleStatusBtn").addEventListener("click", async () => {
-    try { await setTicketStatus(id, ticket.status === "open" ? "closed" : "open"); }
-    catch (err) { console.error(err); }
+  document.getElementById("closeBtn")?.addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try { await closeTicket(id); }
+    catch (err) { console.error(err); e.target.disabled = false; }
+  });
+
+  document.getElementById("reopenBtn")?.addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try { await reopenTicket(id); }
+    catch (err) { console.error(err); e.target.disabled = false; }
   });
 
   unsubMessages?.();
   unsubMessages = subscribeTicketMessages(id, renderMessages);
 
-  document.getElementById("composerForm").addEventListener("submit", async (e) => {
+  const input = document.getElementById("composerInput");
+  const form = document.getElementById("composerForm");
+  if (input) {
+    input.addEventListener("input", () => {
+      input.style.height = "auto";
+      input.style.height = `${input.scrollHeight}px`;
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        form.requestSubmit();
+      }
+    });
+  }
+  form?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const input = document.getElementById("composerInput");
     const text = input.value;
     input.value = "";
-    try { await sendTicketMessage(id, text, { isStaff: false }); }
+    input.style.height = "auto";
+    try { await sendTicketMessage(id, text, { isStaff: false, currentStatus: ticket.status }); }
     catch (err) { console.error(err); }
   });
 }
@@ -154,7 +192,7 @@ function renderMessages(messages) {
   if (!el) return;
   el.innerHTML = messages.map(m => `
     ${m.senderId !== currentUid ? `<div class="thread-sender-name">${escapeHtml(m.senderName || "Support")}</div>` : ""}
-    <div class="thread-bubble ${m.senderId === currentUid ? "mine" : ""}">${escapeHtml(m.text)}</div>
+    <div class="thread-bubble ${m.senderId === currentUid ? "mine" : ""}">${escapeHtml(m.text).replace(/\n/g, "<br>")}</div>
   `).join("") || `<div class="empty-thread" style="padding:30px 16px"><p>Tell us what's going on — we'll get back to you here.</p></div>`;
   el.scrollTop = el.scrollHeight;
 }

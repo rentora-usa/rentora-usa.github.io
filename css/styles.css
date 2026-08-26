@@ -38,9 +38,11 @@ button.avatar-button{border:1px solid #ddd;background:#fff;font-weight:700}
 .chip-btn.danger{color:var(--accent-dark);border-color:#f3c9ca}
 .status-badge{display:inline-block;padding:4px 11px;border-radius:20px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px}
 .status-pending{background:#fff3d6;color:#8a5c00}
-.status-open{background:#fff3d6;color:#8a5c00}
-.status-accepted{background:#e4f5e6;color:#1e7a34}
+.status-open,.status-received{background:#fff3d6;color:#8a5c00}
+.status-read{background:#e6ecf7;color:#28438a}
+.status-accepted,.status-in_progress{background:#dbe9ff;color:#1d4ed8}
 .status-declined,.status-cancelled{background:#f4e4e4;color:#8a2c2c}
+.status-resolved{background:#e4f5e6;color:#1e7a34}
 .status-completed,.status-closed{background:#e6ecf7;color:#28438a}
 
 /* Settings */
@@ -80,6 +82,22 @@ button.avatar-button{border:1px solid #ddd;background:#fff;font-weight:700}
 .thread-sender-name{font-size:11px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:.4px;margin:6px 0 2px 2px}
 .thread-composer{display:flex;gap:10px;padding:14px;border-top:1px solid var(--line)}
 .thread-composer input{flex:1;border:1px solid #ddd;border-radius:24px;padding:12px 18px;outline:none}
+.thread-composer textarea{flex:1;border:1px solid #ddd;border-radius:18px;padding:12px 18px;outline:none;resize:none;font-family:inherit;line-height:1.4;max-height:140px;overflow-y:auto}
+.thread-composer textarea:focus{border-color:#999}
+.thread-composer .primary-button{align-self:flex-end}
+.composer-hint{font-size:11px;color:#aaa;padding:0 14px 10px;margin-top:-4px}
+.ticket-closed-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 20px;border-top:1px solid var(--line);background:var(--cream);font-size:13px;color:#777}
+
+/* Ticket stage tracker (UPS-style: circle, line, circle, line...) */
+.stage-tracker{display:flex;align-items:flex-start;padding:16px 20px;border-bottom:1px solid var(--line);overflow-x:auto}
+.stage-step{display:flex;flex-direction:column;align-items:center;gap:6px;flex-shrink:0;width:78px}
+.stage-dot{width:14px;height:14px;border-radius:50%;background:#fff;border:2px solid #ddd;flex-shrink:0}
+.stage-step.done .stage-dot{background:var(--accent);border-color:var(--accent)}
+.stage-step.active .stage-dot{box-shadow:0 0 0 4px rgba(255,90,95,.18)}
+.stage-label{font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.3px;text-align:center}
+.stage-step.done .stage-label{color:var(--ink)}
+.stage-line{flex:1;height:2px;background:#ddd;margin:6px 0 0}
+.stage-line.done{background:var(--accent)}
 
 /* Star rating */
 .star-display{color:#f5a623;font-size:15px;letter-spacing:1px}
@@ -145,5 +163,32 @@ button.avatar-button{border:1px solid #ddd;background:#fff;font-weight:700}
 .review-overlay{position:fixed;inset:0;background:rgba(20,20,20,.45);display:grid;place-items:center;z-index:100;padding:20px}
 .review-dialog{background:#fff;border-radius:20px;padding:28px;width:min(420px,100%);box-shadow:var(--shadow)}
 
+/* Status page */
+.status-shell{max-width:760px}
+.status-banner{display:flex;align-items:center;gap:16px;padding:28px 30px;border-radius:20px;margin-bottom:34px}
+.status-banner-operational{background:#eafaf0;color:#1e7a34}
+.status-banner-degraded{background:#fff8e6;color:#8a5c00}
+.status-banner-partial_outage{background:#fff0e0;color:#b8560a}
+.status-banner-major_outage{background:#fdeceb;color:#b3261e}
+.status-banner-icon{width:40px;height:40px;border-radius:50%;background:rgba(0,0,0,.08);display:grid;place-items:center;font-weight:800;font-size:18px;flex-shrink:0}
+.status-banner h1{font:700 22px Manrope;margin:0}
+.status-components{border:1px solid var(--line);border-radius:18px;overflow:hidden}
+.status-component-row{display:flex;justify-content:space-between;align-items:center;padding:16px 22px;border-bottom:1px solid var(--line);font-weight:600;font-size:14px}
+.status-component-row:last-child{border-bottom:0}
+.status-pill{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:700;padding:5px 12px;border-radius:20px;text-transform:capitalize}
+.status-pill-dot{width:7px;height:7px;border-radius:50%;background:currentColor;flex-shrink:0}
+.status-pill-operational{background:#eafaf0;color:#1e7a34}
+.status-pill-degraded{background:#fff8e6;color:#8a5c00}
+.status-pill-partial_outage{background:#fff0e0;color:#b8560a}
+.status-pill-major_outage{background:#fdeceb;color:#b3261e}
+.status-pill-impact-minor{background:#fff8e6;color:#8a5c00}
+.status-pill-impact-major{background:#fff0e0;color:#b8560a}
+.status-pill-impact-critical{background:#fdeceb;color:#b3261e}
+.incident-card{border:1px solid var(--line);border-radius:16px;padding:22px;margin-bottom:16px}
+.incident-card-top{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}
+.incident-card-top h3{margin:0;font:700 16px Manrope}
+.incident-timeline{border-left:2px solid var(--line);padding-left:16px;display:flex;flex-direction:column;gap:14px}
+.incident-update-top{display:flex;justify-content:space-between;gap:10px;font-size:13px}
+.incident-update p{margin:4px 0 0;font-size:13px;color:#666;line-height:1.5}
 @media(max-width:900px){.category-grid{grid-template-columns:repeat(3,1fr)}.listing-grid{grid-template-columns:repeat(2,1fr)}.product-layout{grid-template-columns:1fr}.browse-layout{grid-template-columns:1fr}.filters{border:0;border-bottom:1px solid var(--line);padding:0 0 15px}.values-grid,.steps{grid-template-columns:1fr}.hero{padding-top:75px}.location-field{display:none}.settings-grid{grid-template-columns:1fr}.help-category-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:600px){.site-header{padding:0 20px;gap:15px}.main-nav{display:none}.host-link{display:none}.hero{padding:65px 20px}.hero h1,.about-hero h1{letter-spacing:-2.5px}.search-bar{border-radius:20px;flex-wrap:wrap}.search-field{border:0;border-bottom:1px solid var(--line);padding:0 10px}.search-bar .primary-button{width:100%;margin-top:7px}.category-strip,.listing-section,.page-shell{padding-left:20px;padding-right:20px}.category-grid{grid-template-columns:repeat(2,1fr)}.listing-grid{grid-template-columns:1fr 1fr;gap:12px}.listing-image{height:180px}.section-heading{align-items:start;gap:10px}.section-heading h2{font-size:24px}.text-link{font-size:12px}.cta-section{margin:30px 20px 60px;padding:35px 25px;display:block}.cta-section h2{font-size:28px}.light-button{display:inline-block}.site-footer{padding:35px 20px;flex-wrap:wrap}.footer-links{margin-left:0}.auth-card{padding:30px 22px}.product-gallery img{height:350px}.product-info h1{font-size:34px}.manage-row{flex-wrap:wrap}.manage-actions{width:100%}.account-dropdown{right:-10px;min-width:210px}.messages-layout{grid-template-columns:1fr;height:auto}.conversation-list{max-height:220px}.profile-header{flex-direction:column;text-align:center}.help-hero{padding:50px 20px 36px}.help-category-grid{grid-template-columns:1fr}.help-cta{margin:40px 20px 60px;padding:34px 24px;display:block}.help-cta h2{font-size:24px}.help-cta .primary-button{display:inline-block;margin-top:16px}.help-article-row{flex-wrap:wrap}}
