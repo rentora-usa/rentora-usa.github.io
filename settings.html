@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Settings | Rentora</title>  <link rel="icon" type="image/png" sizes="32x32" href="img/favicon-32.png">
+  <title>Settings | Rentora</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="img/favicon-32.png">
   <link rel="icon" type="image/png" sizes="512x512" href="img/favicon-512.png">
   <link rel="apple-touch-icon" href="img/apple-touch-icon.png">
   <link rel="stylesheet" href="css/styles.css">
@@ -40,7 +41,7 @@
       <p id="profileMessage" class="auth-error hidden"></p>
     </section>
 
-    <section class="settings-card danger-zone">
+    <section class="settings-card">
       <h2>Account</h2>
       <div class="settings-readonly">
         <div><strong>Email:</strong> <span id="accountEmail">—</span></div>
@@ -50,6 +51,17 @@
       <form style="margin-top:28px">
         <button type="button" class="chip-btn" id="signOutBtn">Log out of Rentora</button>
       </form>
+    </section>
+
+    <section class="settings-card" id="securityCard">
+      <h2>Security</h2>
+      <div id="securityBody"><p class="muted">Loading…</p></div>
+    </section>
+
+    <section class="settings-card danger-zone">
+      <h2>Delete account</h2>
+      <p class="muted">This permanently deletes your Rentora login. Your listings, reviews, and messages are not automatically removed — see the Help Center if that matters for your situation.</p>
+      <button type="button" class="chip-btn danger" id="deleteAccountBtn" style="margin-top:18px">Delete my account</button>
     </section>
   </div>
 </main>

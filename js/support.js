@@ -52,6 +52,7 @@ export async function createTicket(subject, firstMessage) {
   const ref = await addDoc(ticketsRef, {
     userId: user.uid,
     userName,
+    userEmail: user.email || "",
     subject: subject.trim().slice(0, 150),
     status: "received",
     assignedStaffId: "",

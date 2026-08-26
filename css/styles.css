@@ -87,6 +87,8 @@ button.avatar-button{border:1px solid #ddd;background:#fff;font-weight:700}
 .thread-composer .primary-button{align-self:flex-end}
 .composer-hint{font-size:11px;color:#aaa;padding:0 14px 10px;margin-top:-4px}
 .ticket-closed-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 20px;border-top:1px solid var(--line);background:var(--cream);font-size:13px;color:#777}
+.ticket-requester-info{padding:10px 20px;border-bottom:1px solid var(--line);font-size:12px;color:#888;display:flex;flex-wrap:wrap;gap:4px}
+.ticket-requester-info a,.ticket-requester-info button{color:#888}
 
 /* Ticket stage tracker (UPS-style: circle, line, circle, line...) */
 .stage-tracker{display:flex;align-items:flex-start;padding:16px 20px;border-bottom:1px solid var(--line);overflow-x:auto}

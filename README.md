@@ -6,6 +6,25 @@ Rentora is a peer-to-peer rental marketplace running on a live Firebase backend:
 
 ---
 
+## 13. This round: more account settings, and richer ticket context for staff
+
+### Self-service account settings
+
+`settings.html` has two new cards, both pure Firebase Auth operations — no `firestore.rules` changes needed this round:
+
+- **Security** (email/password accounts only): change your email — sends a confirmation link to the *new* address via `verifyBeforeUpdateEmail()`, the change only applies once that link is clicked, so a typo or someone else's address never silently takes over your account — and change your password. Both require re-entering your current password first (`reauthenticateWithCredential`), which Firebase requires for any sensitive change if your session isn't very recent. Google/Apple accounts see an explanatory note instead of these forms — your password and email live with them, not us, so editing here wouldn't do anything meaningful.
+- **Delete account**: type "DELETE" to confirm, re-authenticate (password re-entry for password accounts, a Google/Apple confirmation popup for federated accounts), and it's gone. Same honest caveat as the admin-triggered version: this deletes the Firebase Auth login only — listings, reviews, and messages aren't automatically cleaned up (see the note in §11's roadmap item about this).
+
+One known, low-stakes staleness: the `users/{uid}` Firestore doc's `email` field stays immutable by design (see §4's security rules) and isn't updated when someone changes their Auth email via the new flow above. The only place that matters is the ticket-info fallback described below, for tickets created before this round — worst case, it shows someone's old email instead of their current one, never a wrong *account*.
+
+### Staff see real context on every ticket now
+
+The thread header in `admin.html` shows, next to the requester's name: their **email**, member-since date, star rating (or "No reviews yet"), a **View profile** link, and a **Manage account** button that jumps straight to the Users tab with their email pre-filled in search — so acting on what a ticket says (disabling an account, sending a password reset) is one click away instead of a manual copy-paste-search.
+
+New tickets store the requester's email directly (`js/support.js`), but tickets created before this round didn't have that field — `admin.js`'s `fetchTicketUserInfo()` falls back to reading it off their `users/{uid}` doc (already public-read, so this needs no new permissions) and caches the result per session so reopening the same person's tickets doesn't refetch.
+
+---
+
 ## 12. This round: ticket lifecycle tracker, Shift+Enter, and a status page
 
 ### Support tickets now have a real 5-stage lifecycle

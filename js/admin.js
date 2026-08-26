@@ -1,6 +1,6 @@
 import { auth, db } from "./firebase.js";
 import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
-import { collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+import { collection, doc, getDoc, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import {
   isStaffUser, fetchStaffProfile, saveStaffProfile,
   subscribeAllTickets, subscribeTicketMessages, sendTicketMessage,
@@ -12,6 +12,7 @@ import {
 } from "./admin-users.js";
 import { fetchAllListingsForStaff, setListingAvailability, deleteListing } from "./listings.js";
 import { fetchRequestsForListing } from "./rentals.js";
+import { fetchReviewsForUser, averageRating } from "./reviews.js";
 import {
   subscribeComponents, subscribeIncidents, COMPONENT_STATUSES, INCIDENT_STATUSES,
   createComponent, updateComponentStatus, renameComponent, deleteComponent,
@@ -22,12 +23,14 @@ const root = document.getElementById("adminRoot");
 let currentUid = null;
 let myStaffProfile = null;
 let activeSection = "tickets";
+let pendingUserSearch = ""; // consumed once by renderUsersSection when jumping there from a ticket
 
 // Tickets section state
 let tickets = [];
 let activeTicketId = null;
 let activeTicketFilter = "open";
 let unsubMessages = null;
+const ticketUserInfoCache = new Map(); // uid -> { email, memberSince, rating, reviewCount }
 
 // Listings section state
 let allListingsCache = [];
@@ -48,6 +51,36 @@ function renderStageTracker(status) {
     return `<div class="stage-step ${state}"><span class="stage-dot"></span><span class="stage-label">${s.label}</span></div>${line}`;
   }).join("")}</div>`;
 }
+
+// Context on the person who opened a ticket, for the info panel in the
+// thread header. Tickets created before userEmail was stored on the
+// document fall back to reading it off users/{uid} (public read, so this
+// never needs the admin Worker) — so old tickets still show a real email
+// instead of "—". Cached per uid since the same person's tickets come up
+// repeatedly in one admin session.
+async function fetchTicketUserInfo(ticket) {
+  if (ticketUserInfoCache.has(ticket.userId)) return ticketUserInfoCache.get(ticket.userId);
+
+  const info = { email: ticket.userEmail || "", memberSince: null, rating: 0, reviewCount: 0 };
+  try {
+    const [userSnap, reviews] = await Promise.all([
+      getDoc(doc(db, "users", ticket.userId)),
+      fetchReviewsForUser(ticket.userId)
+    ]);
+    if (userSnap.exists()) {
+      const u = userSnap.data();
+      if (!info.email) info.email = u.email || "";
+      info.memberSince = u.createdAt || null;
+    }
+    info.rating = averageRating(reviews);
+    info.reviewCount = reviews.length;
+  } catch (err) {
+    console.error("fetchTicketUserInfo", err);
+  }
+  ticketUserInfoCache.set(ticket.userId, info);
+  return info;
+}
+
 function fmtEpochMs(ms) {
   if (!ms) return "—";
   return new Date(Number(ms)).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
@@ -110,7 +143,11 @@ function renderSection() {
   unsubMessages = null;
   const body = document.getElementById("sectionBody");
   if (activeSection === "tickets") renderTicketsSection(body);
-  else if (activeSection === "users") renderUsersSection(body);
+  else if (activeSection === "users") {
+    const search = pendingUserSearch;
+    pendingUserSearch = "";
+    renderUsersSection(body, search);
+  }
   else if (activeSection === "listings") renderListingsSection(body);
   else renderStatusSection(body);
 }
@@ -208,6 +245,7 @@ function openTicket(id, silent) {
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">${controls.join("")}</div>
     </div>
+    <div class="ticket-requester-info" id="requesterInfo"><span class="state-message" style="padding:10px 0">Loading requester info…</span></div>
     ${renderStageTracker(ticket.status)}
     <div class="thread-messages" id="threadMessages"><p class="state-message">Loading messages…</p></div>
     ${isClosed ? `
@@ -219,6 +257,27 @@ function openTicket(id, silent) {
       </form>
       <div class="composer-hint">Enter to send · Shift+Enter for a new line</div>
     `}`;
+
+  fetchTicketUserInfo(ticket).then(info => {
+    const panel = document.getElementById("requesterInfo");
+    if (!panel) return; // ticket switched again before this resolved
+    const memberSince = info.memberSince?.toDate
+      ? info.memberSince.toDate().toLocaleDateString(undefined, { year: "numeric", month: "short" })
+      : null;
+    panel.innerHTML = `
+      <span>${info.email ? escapeHtml(info.email) : "No email on file"}</span>
+      ${memberSince ? `<span>· Member since ${memberSince}</span>` : ""}
+      <span>· ${info.reviewCount ? `★ ${info.rating.toFixed(1)} (${info.reviewCount} review${info.reviewCount === 1 ? "" : "s"})` : "No reviews yet"}</span>
+      <span>· <a href="profile.html?uid=${ticket.userId}" target="_blank" class="text-link">View profile</a></span>
+      <span>· <button type="button" class="text-link" id="manageAccountBtn" style="background:none;border:0;padding:0;cursor:pointer;font:inherit">Manage account</button></span>
+    `;
+    document.getElementById("manageAccountBtn")?.addEventListener("click", () => {
+      pendingUserSearch = info.email || "";
+      activeSection = "users";
+      root.querySelectorAll(".tab-btn[data-section]").forEach(b => b.classList.toggle("active", b.dataset.section === "users"));
+      renderSection();
+    });
+  });
 
   document.getElementById("claimBtn")?.addEventListener("click", async () => {
     try {
@@ -288,12 +347,12 @@ function renderMessages(messages) {
 
 // ================= Users =================
 
-function renderUsersSection(body) {
+function renderUsersSection(body, initialSearch = "") {
   body.innerHTML = `
     ${!adminWorkerConfigured() ? `<p class="demo-note" style="margin-bottom:16px">The admin Worker isn't configured yet (js/admin-config.js) — user management is unavailable until it's deployed. See README §11.</p>` : ""}
     <div class="search-field" style="border:1px solid #ddd;border-radius:14px;padding:4px 18px;max-width:420px;margin-bottom:20px">
       <span>⌕</span>
-      <input id="userSearchInput" type="search" placeholder="Search by email…" autocomplete="off">
+      <input id="userSearchInput" type="search" placeholder="Search by email…" autocomplete="off" value="${escapeHtml(initialSearch)}">
     </div>
     <div id="userListBody"><p class="state-message">Loading users…</p></div>
   `;
@@ -303,7 +362,7 @@ function renderUsersSection(body) {
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => loadUsers(searchInput.value.trim()), 300);
   });
-  loadUsers("");
+  loadUsers(initialSearch);
 }
 
 async function loadUsers(search) {
