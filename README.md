@@ -36,13 +36,16 @@ Staff can also add these photos themselves (`firestore.rules` allows either the 
 
 ### Deploying admin-worker/
 
-Same shape as `payments-worker/` if you've done that before:
+**No local tools, entirely in the browser:** use `admin-worker/admin-worker-bundle.js` — it's `admin-worker/src/*.js` merged into one dependency-free file. Go to [dash.cloudflare.com](https://dash.cloudflare.com) → **Workers & Pages → Create → Create Worker**, give it a name, open the online editor, paste the bundle's contents in, and hit **Deploy**. Then, in that Worker's **Settings → Variables** tab: add `FIREBASE_PROJECT_ID` (`rentora-415ca`), `FIREBASE_API_KEY`, and `ALLOWED_ORIGIN` (`*` to start) as plain variables, and `FIREBASE_SERVICE_ACCOUNT_JSON` (the full service-account key file contents) as an **encrypted** variable — click "Encrypt" on it before saving. The bundle file has these same instructions in a comment at the top.
+
+**With local tools (Node.js + terminal):** the `src/` folder's multi-file version, deployed via Wrangler:
 
 1. `cd admin-worker && npm install`
-2. `wrangler login` (one-time, opens a browser to authorize)
-3. `wrangler secret put FIREBASE_SERVICE_ACCOUNT_JSON` — paste the full contents of a Firebase service account key JSON file as one line (Firebase Console → Project settings → Service accounts → Generate new private key). Reuse the same key from `payments-worker/` if you already have one.
-4. `wrangler deploy` — prints your Worker's URL (something like `https://rentora-admin.yourname.workers.dev`)
-5. Paste that URL into `ADMIN_WORKER_URL` in `js/admin-config.js`
+2. `npx wrangler login`
+3. `npx wrangler secret put FIREBASE_SERVICE_ACCOUNT_JSON` — paste the service account JSON contents
+4. `npx wrangler deploy`
+
+Either path ends the same way: copy the Worker's URL and paste it into `ADMIN_WORKER_URL` in `js/admin-config.js`, then redeploy your site.
 
 Once that's done, the Users tab in `admin.html` goes from "not configured yet" to fully working — no other code changes needed.
 
