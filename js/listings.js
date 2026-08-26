@@ -34,6 +34,18 @@ export async function fetchPublicListingsByOwner(uid) {
   return items.filter(x => x.available);
 }
 
+// Every listing on the platform, available or hidden — for the staff admin
+// panel's Listings tab. Reading this needs no special permission (listings
+// are publicly readable already); it's *writing* moderation actions like
+// hide/delete on a listing you don't own that firestore.rules gates to
+// isStaff().
+export async function fetchAllListingsForStaff() {
+  const snap = await getDocs(listingsRef);
+  const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  items.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+  return items;
+}
+
 export async function createListing(data) {
   const user = auth.currentUser;
   if (!user) throw new Error("You must be logged in to list an item.");

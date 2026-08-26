@@ -1,7 +1,7 @@
 import { db } from "./firebase.js";
 import {
   collection, doc, getDocs, addDoc, updateDoc, onSnapshot,
-  query, where, Timestamp, serverTimestamp
+  query, where, Timestamp, serverTimestamp, arrayUnion
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import { releaseDeposit as releaseDepositViaWorker, captureDeposit as captureDepositViaWorker } from "./payments.js";
 
@@ -68,6 +68,8 @@ export async function createRentalRequest({ listingId, ownerId, renterId, start,
     claimReason: "",
     claimPhotoUrls: [],
     claimedAt: null,
+    pickupPhotoUrls: [],
+    returnPhotoUrls: [],
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp()
   });
@@ -148,4 +150,36 @@ export async function applyOverdueDepositRule(requests) {
       console.error("applyOverdueDepositRule", r.id, err);
     }
   }
+}
+
+// ---------- Pickup/return condition photos ----------
+// Owner documents these as a matter of course; staff can also add them
+// while investigating a support ticket (see firestore.rules — the update
+// rule allows either). arrayUnion is used instead of read-modify-write so
+// two people adding photos around the same time can't clobber each other.
+
+export async function addPickupPhotos(requestId, urls) {
+  if (!urls.length) return;
+  return updateDoc(doc(db, "rentalRequests", requestId), {
+    pickupPhotoUrls: arrayUnion(...urls),
+    updatedAt: serverTimestamp()
+  });
+}
+
+export async function addReturnPhotos(requestId, urls) {
+  if (!urls.length) return;
+  return updateDoc(doc(db, "rentalRequests", requestId), {
+    returnPhotoUrls: arrayUnion(...urls),
+    updatedAt: serverTimestamp()
+  });
+}
+
+// ---------- Staff: full rental history for a listing ----------
+// Used by the admin panel's Listings tab when a staff member drills into a
+// specific listing to investigate a dispute — every request against it,
+// with whatever pickup/return/claim photos exist. Firestore rules let
+// staff read any rentalRequest, not just their own.
+export async function fetchRequestsForListing(listingId) {
+  const snap = await getDocs(query(requestsRef, where("listingId", "==", listingId)));
+  return sorted(snap.docs.map(d => ({ id: d.id, ...d.data() })));
 }

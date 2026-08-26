@@ -95,9 +95,10 @@ service cloud.firestore {
                     && request.resource.data.rating <= 5;
 
       // Owner can edit their listing, but can't reassign it to someone else
-      // or forge a rating/review count for themselves.
+      // or forge a rating/review count for themselves. Staff can also edit
+      // (in practice: hide/show) any listing for moderation purposes.
       allow update: if isSignedIn()
-                    && resource.data.ownerId == request.auth.uid
+                    && (resource.data.ownerId == request.auth.uid || isStaff())
                     && request.resource.data.ownerId == resource.data.ownerId
                     && request.resource.data.rating == resource.data.rating
                     && request.resource.data.reviewCount == resource.data.reviewCount
@@ -106,7 +107,7 @@ service cloud.firestore {
                     && request.resource.data.depositAmount is number
                     && request.resource.data.depositAmount >= 0;
 
-      allow delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow delete: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isStaff());
     }
 
     // ---------- rentalRequests/{requestId} ----------
@@ -135,7 +136,8 @@ service cloud.firestore {
 
       allow read: if isSignedIn()
                   && (resource.data.renterId == request.auth.uid
-                      || resource.data.ownerId == request.auth.uid);
+                      || resource.data.ownerId == request.auth.uid
+                      || isStaff());
 
       // Owner may accept/decline/complete; renter may only cancel while pending.
       // Either way, only the status (+ updatedAt) field can change.
@@ -163,6 +165,20 @@ service cloud.firestore {
                     && request.resource.data.claimedAmount >= 0
                     && request.resource.data.claimedAmount <= resource.data.depositAmount
                     && (request.resource.data.depositStatus == "released" ? request.resource.data.claimedAmount == 0 : true);
+
+      // Pickup/return condition photos — purely additive documentation
+      // (doesn't touch status or deposit fields), so it's kept as its own
+      // permissive rule rather than folded into the deposit-resolution one
+      // above. The owner documents these as a matter of course; staff can
+      // also add them while investigating a dispute (e.g. if an owner
+      // won't cooperate, support can still capture what's needed).
+      allow update: if isSignedIn()
+                    && (resource.data.ownerId == request.auth.uid || isStaff())
+                    && onlyFieldsChanged(["pickupPhotoUrls", "returnPhotoUrls", "updatedAt"])
+                    && request.resource.data.pickupPhotoUrls is list
+                    && request.resource.data.pickupPhotoUrls.size() <= 20
+                    && request.resource.data.returnPhotoUrls is list
+                    && request.resource.data.returnPhotoUrls.size() <= 20;
 
       allow delete: if false;
     }
@@ -298,6 +314,24 @@ service cloud.firestore {
 
         allow update, delete: if false;
       }
+    }
+
+    // ---------- adminAuditLog/{entryId} ----------
+    // A record of sensitive staff actions (disabling an account, deleting a
+    // listing, etc.) — staff-readable so actions are visible to the whole
+    // team, but immutable once written. Entries written directly by staff
+    // from the client (e.g. listing moderation) must be self-attributed;
+    // entries from the admin Worker (account actions — see
+    // admin-worker/) bypass rules entirely via its service account, the
+    // same way the payments Worker does.
+    match /adminAuditLog/{entryId} {
+      allow read: if isStaff();
+      allow create: if isStaff()
+                    && request.resource.data.staffId == request.auth.uid
+                    && request.resource.data.action is string
+                    && request.resource.data.targetType is string
+                    && request.resource.data.targetId is string;
+      allow update, delete: if false;
     }
   }
 }

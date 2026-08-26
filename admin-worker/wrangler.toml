@@ -1,0 +1,22 @@
+name = "rentora-admin"
+main = "src/worker.js"
+compatibility_date = "2024-11-01"
+
+[vars]
+FIREBASE_PROJECT_ID = "rentora-415ca"
+FIREBASE_API_KEY = "AIzaSyDqQwTspDeEpf8nAXt3AP04v8Phn-e5kJQ"
+# "*" gets this running; once you know your real site's origin, set it here.
+ALLOWED_ORIGIN = "*"
+
+# Secret — never put this here. Set it with:
+#   wrangler secret put FIREBASE_SERVICE_ACCOUNT_JSON
+#
+# The full contents of a Firebase service account key JSON file, pasted as
+# one line (Firebase Console -> Project settings -> Service accounts ->
+# Generate new private key). This is the SAME kind of key used by
+# payments-worker/ — if you already generated one for that, you can reuse
+# it here too (it's tied to the Firebase project, not to a specific Worker).
+#
+# The default service account Firebase generates already has the IAM roles
+# needed for both Firestore and Identity Platform admin access, so no extra
+# console setup should be required beyond generating the key itself.

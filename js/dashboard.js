@@ -4,7 +4,7 @@ import {
   fetchListingsByOwner, setListingAvailability, deleteListing,
   fetchListingById, addBookedRange
 } from "./listings.js";
-import { subscribeRequestsAsRenter, subscribeRequestsAsOwner, updateRequestStatus, applyOverdueDepositRule, confirmCleanReturn, reportDamageClaim, RETURN_GRACE_HOURS } from "./rentals.js";
+import { subscribeRequestsAsRenter, subscribeRequestsAsOwner, updateRequestStatus, applyOverdueDepositRule, confirmCleanReturn, reportDamageClaim, addPickupPhotos, addReturnPhotos, RETURN_GRACE_HOURS } from "./rentals.js";
 import { submitReview, fetchMyReviewFor } from "./reviews.js";
 import { startOrOpenConversation } from "./messages.js";
 
@@ -152,6 +152,10 @@ async function renderRequests(elId, items, viewerRole) {
       });
       document.getElementById(`report-damage-${r.id}`)?.addEventListener("click", () => openDamageDialog(r));
     }
+    if (viewerRole === "owner" && (r.status === "accepted" || r.status === "completed")) {
+      document.getElementById(`add-pickup-${r.id}`)?.addEventListener("click", () => openPhotoDialog(r.id, "pickup"));
+      document.getElementById(`add-return-${r.id}`)?.addEventListener("click", () => openPhotoDialog(r.id, "return"));
+    }
     document.getElementById(`message-${r.id}`)?.addEventListener("click", async () => {
       try {
         const title = await listingTitle(r.listingId);
@@ -173,11 +177,16 @@ async function requestRow(r, viewerRole) {
   const canCancel = viewerRole === "renter" && r.status === "pending";
   const canComplete = viewerRole === "owner" && r.status === "accepted";
   const canResolveDeposit = viewerRole === "owner" && r.depositAmount > 0 && r.depositStatus === "pending" && (r.status === "accepted" || r.status === "completed");
+  const canDocument = viewerRole === "owner" && (r.status === "accepted" || r.status === "completed");
 
   const actions = [`<button class="chip-btn" id="message-${r.id}">Message</button>`];
   if (canAccept) actions.push(`<button class="chip-btn" id="accept-${r.id}">Accept</button>`, `<button class="chip-btn danger" id="decline-${r.id}">Decline</button>`);
   if (canCancel) actions.push(`<button class="chip-btn danger" id="cancel-${r.id}">Cancel request</button>`);
   if (canComplete) actions.push(`<button class="chip-btn" id="complete-${r.id}">Mark completed</button>`);
+  if (canDocument) actions.push(
+    `<button class="chip-btn" id="add-pickup-${r.id}">Add pickup photos</button>`,
+    `<button class="chip-btn" id="add-return-${r.id}">Add return photos</button>`
+  );
   if (canResolveDeposit) actions.push(
     `<button class="chip-btn" id="return-clean-${r.id}">Confirm clean return</button>`,
     `<button class="chip-btn danger" id="report-damage-${r.id}">Report damage</button>`
@@ -189,10 +198,17 @@ async function requestRow(r, viewerRole) {
       <h3><a href="product.html?id=${r.listingId}">${escapeHtml(title)}</a></h3>
       <div class="manage-meta">${fmtDate(r.startDate)} → ${fmtDate(r.endDate)} · $${r.totalPrice} total</div>
       ${depositMetaLine(r, viewerRole)}
+      ${photoLinksLine("Pickup photos", r.pickupPhotoUrls)}
+      ${photoLinksLine("Return photos", r.returnPhotoUrls)}
     </div>
     <span class="status-badge status-${r.status}">${r.status}</span>
     <div class="manage-actions">${actions.join("")}</div>
   </div>`;
+}
+
+function photoLinksLine(label, urls) {
+  if (!urls || !urls.length) return "";
+  return `<div class="manage-meta">${label}: ${urls.map((u, i) => `<a href="${u}" target="_blank" rel="noopener" class="text-link">#${i + 1}</a>`).join(" ")}</div>`;
 }
 
 function depositMetaLine(r, viewerRole) {
@@ -226,6 +242,42 @@ async function wireReviewButton(r, viewerRole) {
 
   document.getElementById(`review-btn-${r.id}`).addEventListener("click", () => {
     openReviewDialog(r, targetUserId, existing);
+  });
+}
+
+function openPhotoDialog(requestId, kind) {
+  const label = kind === "pickup" ? "pickup" : "return";
+  const overlay = document.createElement("div");
+  overlay.className = "review-overlay";
+  overlay.innerHTML = `
+    <div class="review-dialog">
+      <h3 style="margin:0 0 4px">Add ${label} photos</h3>
+      <p class="muted" style="margin:0 0 18px">Paste one or more photo URLs, separated by commas. Visible to both sides of the rental (and to support, if it's ever needed).</p>
+      <textarea id="photoUrlsInput" rows="3" style="width:100%;border:1px solid #ddd;border-radius:11px;padding:12px;font-family:inherit" placeholder="https://example.com/photo1.jpg, https://example.com/photo2.jpg"></textarea>
+      <p id="photoDialogError" class="auth-error hidden"></p>
+      <div style="display:flex;gap:10px;margin-top:18px">
+        <button class="primary-button" id="photoSubmit" style="flex:1">Add photos</button>
+        <button class="chip-btn" id="photoCancel">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  overlay.querySelector("#photoCancel").addEventListener("click", () => overlay.remove());
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+
+  overlay.querySelector("#photoSubmit").addEventListener("click", async () => {
+    const errorBox = overlay.querySelector("#photoDialogError");
+    const urls = overlay.querySelector("#photoUrlsInput").value.split(",").map(s => s.trim()).filter(Boolean);
+    if (!urls.length) { errorBox.textContent = "Add at least one photo URL."; errorBox.classList.remove("hidden"); return; }
+    try {
+      if (kind === "pickup") await addPickupPhotos(requestId, urls);
+      else await addReturnPhotos(requestId, urls);
+      overlay.remove();
+    } catch (err) {
+      console.error(err);
+      errorBox.textContent = "Couldn't save the photos — open the browser console for the exact error.";
+      errorBox.classList.remove("hidden");
+    }
   });
 }
 
