@@ -6,6 +6,17 @@ import {
 
 const ticketsRef = collection(db, "supportTickets");
 
+// The 5-stage lifecycle a ticket moves through, in order. "closed" is a
+// hard stop — see canPostToTicket() in firestore.rules — nobody can post
+// another message until it's reopened, which resets it to "received".
+export const TICKET_STAGES = [
+  { id: "received", label: "Received" },
+  { id: "read", label: "Read" },
+  { id: "in_progress", label: "In Progress" },
+  { id: "resolved", label: "Resolved" },
+  { id: "closed", label: "Closed" }
+];
+
 // ---------- Staff membership & profile ----------
 // Staff accounts are provisioned manually in the Firebase console (create a
 // doc at staff/{uid}) — see README §8. There's no in-app way to grant staff
@@ -42,7 +53,7 @@ export async function createTicket(subject, firstMessage) {
     userId: user.uid,
     userName,
     subject: subject.trim().slice(0, 150),
-    status: "open",
+    status: "received",
     assignedStaffId: "",
     assignedStaffName: "",
     lastMessage: "",
@@ -81,7 +92,11 @@ export function subscribeTicketMessages(ticketId, callback) {
     err => console.error("subscribeTicketMessages", err));
 }
 
-export async function sendTicketMessage(ticketId, text, { isStaff, staffName } = {}) {
+// currentStatus is passed in (rather than re-read from Firestore) since the
+// caller already has the ticket in memory — this is just to decide whether
+// a staff reply should auto-advance the stage tracker, not for security;
+// firestore.rules is what actually blocks posting into a closed ticket.
+export async function sendTicketMessage(ticketId, text, { isStaff, staffName, currentStatus } = {}) {
   const user = auth.currentUser;
   if (!user) throw new Error("You must be logged in to message.");
   const trimmed = text.trim();
@@ -95,11 +110,19 @@ export async function sendTicketMessage(ticketId, text, { isStaff, staffName } =
     createdAt: serverTimestamp()
   });
 
-  await updateDoc(doc(db, "supportTickets", ticketId), {
+  const updates = {
     lastMessage: trimmed.slice(0, 200),
     lastMessageAt: serverTimestamp(),
     lastSenderId: user.uid
-  });
+  };
+  // A staff member actually replying is a good, low-friction signal that
+  // the ticket has moved from "received/read" into "in_progress" — no
+  // separate click required. Staff can still override with any stage
+  // manually (setTicketStage) if this isn't the right moment for that.
+  if (isStaff && (currentStatus === "received" || currentStatus === "read")) {
+    updates.status = "in_progress";
+  }
+  await updateDoc(doc(db, "supportTickets", ticketId), updates);
 }
 
 // Explicit claim action (a button in the admin panel) rather than
@@ -112,6 +135,25 @@ export async function claimTicket(ticketId, staffId, staffName) {
   });
 }
 
-export async function setTicketStatus(ticketId, status) {
-  return updateDoc(doc(db, "supportTickets", ticketId), { status });
+// Staff: jump the tracker to any of the 5 stages directly.
+export async function setTicketStage(ticketId, stage) {
+  return updateDoc(doc(db, "supportTickets", ticketId), { status: stage });
+}
+
+// The one thing a staff member opening a ticket does automatically — moves
+// "received" to "read" the first time someone actually looks at it. A
+// no-op (and no write) if it's already past that stage.
+export async function markTicketRead(ticketId, currentStatus) {
+  if (currentStatus !== "received") return;
+  return updateDoc(doc(db, "supportTickets", ticketId), { status: "read" });
+}
+
+// Closing works the same way for the ticket owner or staff; reopening
+// (owner-side) always resets to "received" — a fresh cycle for staff to
+// re-triage, per firestore.rules.
+export async function closeTicket(ticketId) {
+  return updateDoc(doc(db, "supportTickets", ticketId), { status: "closed" });
+}
+export async function reopenTicket(ticketId) {
+  return updateDoc(doc(db, "supportTickets", ticketId), { status: "received" });
 }

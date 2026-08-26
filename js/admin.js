@@ -1,21 +1,64 @@
-import { auth } from "./firebase.js";
+import { auth, db } from "./firebase.js";
 import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
+import { collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import {
   isStaffUser, fetchStaffProfile, saveStaffProfile,
   subscribeAllTickets, subscribeTicketMessages, sendTicketMessage,
-  claimTicket, setTicketStatus
+  claimTicket, setTicketStage, markTicketRead, closeTicket, reopenTicket, TICKET_STAGES
 } from "./support.js";
+import {
+  listUsers, searchUsersByEmail, setAccountDisabled, forceSignOut,
+  sendPasswordReset, deleteAccount, adminWorkerConfigured
+} from "./admin-users.js";
+import { fetchAllListingsForStaff, setListingAvailability, deleteListing } from "./listings.js";
+import { fetchRequestsForListing } from "./rentals.js";
+import {
+  subscribeComponents, subscribeIncidents, COMPONENT_STATUSES, INCIDENT_STATUSES,
+  createComponent, updateComponentStatus, renameComponent, deleteComponent,
+  createIncident, addIncidentUpdate, deleteIncident
+} from "./status.js";
 
 const root = document.getElementById("adminRoot");
 let currentUid = null;
 let myStaffProfile = null;
+let activeSection = "tickets";
+
+// Tickets section state
 let tickets = [];
-let activeId = null;
-let activeFilter = "open";
+let activeTicketId = null;
+let activeTicketFilter = "open";
 let unsubMessages = null;
+
+// Listings section state
+let allListingsCache = [];
+let activeListingId = null;
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function fmtDate(ts) {
+  const d = ts?.toDate ? ts.toDate() : new Date(ts);
+  return isNaN(d) ? "" : d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+function renderStageTracker(status) {
+  const idx = TICKET_STAGES.findIndex(s => s.id === status);
+  return `<div class="stage-tracker">${TICKET_STAGES.map((s, i) => {
+    const state = i < idx ? "done" : i === idx ? "done active" : "";
+    const line = i < TICKET_STAGES.length - 1 ? `<div class="stage-line ${i < idx ? "done" : ""}"></div>` : "";
+    return `<div class="stage-step ${state}"><span class="stage-dot"></span><span class="stage-label">${s.label}</span></div>${line}`;
+  }).join("")}</div>`;
+}
+function fmtEpochMs(ms) {
+  if (!ms) return "—";
+  return new Date(Number(ms)).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+async function logStaffAction(action, targetType, targetId, details) {
+  try {
+    await addDoc(collection(db, "adminAuditLog"), {
+      staffId: currentUid, staffName: myStaffProfile?.displayName || "",
+      action, targetType, targetId, details, createdAt: serverTimestamp()
+    });
+  } catch (err) { console.error("audit log write failed", err); }
 }
 
 onAuthStateChanged(auth, async (user) => {
@@ -30,37 +73,72 @@ onAuthStateChanged(auth, async (user) => {
 
   myStaffProfile = await fetchStaffProfile(user.uid);
   renderShell();
-  subscribeAllTickets(items => { tickets = items; renderTicketList(); });
+  subscribeAllTickets(items => { tickets = items; if (activeSection === "tickets") renderTicketList(); });
 });
 
 function renderShell() {
   root.innerHTML = `
     <div class="dash-header">
-      <div><p class="eyebrow">Staff Admin</p><h1 style="font:700 34px Manrope;letter-spacing:-1.2px;margin:0">Support queue</h1></div>
+      <div><p class="eyebrow">Staff Admin</p><h1 style="font:700 34px Manrope;letter-spacing:-1.2px;margin:0">Admin</h1></div>
       <button class="chip-btn" id="staffProfileBtn">My support identity</button>
     </div>
 
     <div class="tab-row" style="margin-top:24px">
-      <button class="tab-btn active" data-filter="open">Open</button>
-      <button class="tab-btn" data-filter="mine">Assigned to me</button>
-      <button class="tab-btn" data-filter="closed">Closed</button>
+      <button class="tab-btn active" data-section="tickets">🎫 Tickets</button>
+      <button class="tab-btn" data-section="users">👥 Users</button>
+      <button class="tab-btn" data-section="listings">🏷️ Listings</button>
+      <button class="tab-btn" data-section="status">🟢 Status Page</button>
     </div>
 
-    <div class="messages-layout">
-      <aside class="conversation-list" id="ticketList"><p class="state-message">Loading tickets…</p></aside>
-      <section class="thread-panel" id="threadPanel"><div class="state-message">Pick a ticket to respond.</div></section>
-    </div>
+    <div id="sectionBody" style="margin-top:24px"></div>
   `;
 
-  root.querySelectorAll(".tab-btn").forEach(btn => {
+  root.querySelectorAll(".tab-btn[data-section]").forEach(btn => {
     btn.addEventListener("click", () => {
-      root.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b === btn));
-      activeFilter = btn.dataset.filter;
-      renderTicketList();
+      root.querySelectorAll(".tab-btn[data-section]").forEach(b => b.classList.toggle("active", b === btn));
+      activeSection = btn.dataset.section;
+      renderSection();
     });
   });
 
   document.getElementById("staffProfileBtn").addEventListener("click", openStaffProfileDialog);
+  renderSection();
+}
+
+function renderSection() {
+  unsubMessages?.();
+  unsubMessages = null;
+  const body = document.getElementById("sectionBody");
+  if (activeSection === "tickets") renderTicketsSection(body);
+  else if (activeSection === "users") renderUsersSection(body);
+  else if (activeSection === "listings") renderListingsSection(body);
+  else renderStatusSection(body);
+}
+
+// ================= Tickets =================
+
+function renderTicketsSection(body) {
+  body.innerHTML = `
+    <div class="tab-row" style="margin:0 0 20px">
+      <button class="tab-btn active" data-filter="open">Open</button>
+      <button class="tab-btn" data-filter="mine">Assigned to me</button>
+      <button class="tab-btn" data-filter="closed">Closed</button>
+    </div>
+    <div class="messages-layout">
+      <aside class="conversation-list" id="ticketList"><p class="state-message">Loading tickets…</p></aside>
+      <section class="thread-panel" id="threadPanel">
+        <div class="empty-thread"><div class="empty-thread-icon">🎫</div><h3>No ticket selected</h3><p>Pick a ticket from the list to respond.</p></div>
+      </section>
+    </div>
+  `;
+  body.querySelectorAll(".tab-btn[data-filter]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      body.querySelectorAll(".tab-btn[data-filter]").forEach(b => b.classList.toggle("active", b === btn));
+      activeTicketFilter = btn.dataset.filter;
+      renderTicketList();
+    });
+  });
+  renderTicketList();
 }
 
 function renderTicketList() {
@@ -68,9 +146,9 @@ function renderTicketList() {
   if (!listEl) return;
 
   const filtered = tickets.filter(t => {
-    if (activeFilter === "open") return t.status === "open";
-    if (activeFilter === "closed") return t.status === "closed";
-    if (activeFilter === "mine") return t.assignedStaffId === currentUid;
+    if (activeTicketFilter === "open") return t.status !== "closed";
+    if (activeTicketFilter === "closed") return t.status === "closed";
+    if (activeTicketFilter === "mine") return t.assignedStaffId === currentUid;
     return true;
   });
 
@@ -80,10 +158,10 @@ function renderTicketList() {
   }
 
   listEl.innerHTML = filtered.map(t => `
-    <button type="button" class="conversation-row ${t.id === activeId ? "active" : ""}" data-id="${t.id}">
+    <button type="button" class="conversation-row ${t.id === activeTicketId ? "active" : ""}" data-id="${t.id}">
       <div class="conversation-row-top">
         <span class="conversation-title">${escapeHtml(t.subject)}</span>
-        <span class="status-badge status-${t.status}" style="font-size:9px">${t.status}</span>
+        <span class="status-badge status-${t.status}" style="font-size:9px">${escapeHtml((TICKET_STAGES.find(s => s.id === t.status) || {}).label || t.status)}</span>
       </div>
       <div class="conversation-preview">${escapeHtml(t.userName)} · ${escapeHtml(t.lastMessage || "No messages yet")}</div>
     </button>`).join("");
@@ -92,12 +170,11 @@ function renderTicketList() {
     btn.addEventListener("click", () => openTicket(btn.dataset.id));
   });
 
-  // Keep the open thread in sync with live ticket updates (status, claim).
-  if (activeId && filtered.some(t => t.id === activeId)) openTicket(activeId, true);
+  if (activeTicketId && filtered.some(t => t.id === activeTicketId)) openTicket(activeTicketId, true);
 }
 
 function openTicket(id, silent) {
-  activeId = id;
+  activeTicketId = id;
   if (!silent) {
     document.querySelectorAll("#ticketList .conversation-row").forEach(b => b.classList.toggle("active", b.dataset.id === id));
   }
@@ -106,7 +183,22 @@ function openTicket(id, silent) {
   const threadEl = document.getElementById("threadPanel");
   if (!ticket || !threadEl) return;
 
+  // The one automatic transition: a staff member actually opening a ticket
+  // that's still sitting at "received" moves it to "read". No-op otherwise.
+  markTicketRead(id, ticket.status).catch(err => console.error(err));
+
   const isMine = ticket.assignedStaffId === currentUid;
+  const isClosed = ticket.status === "closed";
+  const idx = TICKET_STAGES.findIndex(s => s.id === ticket.status);
+  const inProgressIdx = TICKET_STAGES.findIndex(s => s.id === "in_progress");
+  const resolvedIdx = TICKET_STAGES.findIndex(s => s.id === "resolved");
+
+  const controls = [];
+  if (!isClosed && !isMine) controls.push(`<button class="chip-btn" id="claimBtn">Claim ticket</button>`);
+  if (!isClosed && idx < inProgressIdx) controls.push(`<button class="chip-btn" id="inProgressBtn">Mark in progress</button>`);
+  if (!isClosed && idx < resolvedIdx) controls.push(`<button class="chip-btn" id="resolveBtn">Mark resolved</button>`);
+  if (!isClosed) controls.push(`<button class="chip-btn danger" id="closeBtn">Close ticket</button>`);
+  if (isClosed) controls.push(`<button class="chip-btn" id="reopenBtn">Reopen</button>`);
 
   threadEl.innerHTML = `
     <div class="thread-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
@@ -114,38 +206,72 @@ function openTicket(id, silent) {
         <strong>${escapeHtml(ticket.subject)}</strong>
         <div class="listing-meta">From ${escapeHtml(ticket.userName)} · ${ticket.assignedStaffName ? `Assigned to ${escapeHtml(ticket.assignedStaffName)}` : "Unclaimed"}</div>
       </div>
-      <div style="display:flex;gap:8px">
-        ${!isMine ? `<button class="chip-btn" id="claimBtn">Claim ticket</button>` : ""}
-        <button class="chip-btn" id="toggleStatusBtn">${ticket.status === "open" ? "Close" : "Reopen"}</button>
-      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">${controls.join("")}</div>
     </div>
+    ${renderStageTracker(ticket.status)}
     <div class="thread-messages" id="threadMessages"><p class="state-message">Loading messages…</p></div>
-    <form class="thread-composer" id="composerForm">
-      <input id="composerInput" type="text" placeholder="Reply as ${escapeHtml(myStaffProfile?.displayName || 'Support')}…" autocomplete="off" maxlength="2000" required>
-      <button class="primary-button" type="submit">Send</button>
-    </form>`;
+    ${isClosed ? `
+      <div class="ticket-closed-banner"><span>This ticket is closed — reopen it to keep replying.</span></div>
+    ` : `
+      <form class="thread-composer" id="composerForm">
+        <textarea id="composerInput" rows="1" placeholder="Reply as ${escapeHtml(myStaffProfile?.displayName || 'Support')}…" maxlength="2000" required></textarea>
+        <button class="primary-button" type="submit">Send</button>
+      </form>
+      <div class="composer-hint">Enter to send · Shift+Enter for a new line</div>
+    `}`;
 
   document.getElementById("claimBtn")?.addEventListener("click", async () => {
-    try { await claimTicket(id, currentUid, myStaffProfile?.displayName || "Support"); }
+    try {
+      await claimTicket(id, currentUid, myStaffProfile?.displayName || "Support");
+      await logStaffAction("claim_ticket", "ticket", id, ticket.subject);
+    } catch (err) { console.error(err); }
+  });
+  document.getElementById("inProgressBtn")?.addEventListener("click", async () => {
+    try { await setTicketStage(id, "in_progress"); }
     catch (err) { console.error(err); }
   });
-
-  document.getElementById("toggleStatusBtn").addEventListener("click", async () => {
-    try { await setTicketStatus(id, ticket.status === "open" ? "closed" : "open"); }
+  document.getElementById("resolveBtn")?.addEventListener("click", async () => {
+    try {
+      await setTicketStage(id, "resolved");
+      await logStaffAction("resolve_ticket", "ticket", id, ticket.subject);
+    } catch (err) { console.error(err); }
+  });
+  document.getElementById("closeBtn")?.addEventListener("click", async () => {
+    try {
+      await closeTicket(id);
+      await logStaffAction("close_ticket", "ticket", id, ticket.subject);
+    } catch (err) { console.error(err); }
+  });
+  document.getElementById("reopenBtn")?.addEventListener("click", async () => {
+    try { await reopenTicket(id); }
     catch (err) { console.error(err); }
   });
 
   unsubMessages?.();
   unsubMessages = subscribeTicketMessages(id, renderMessages);
 
-  document.getElementById("composerForm").addEventListener("submit", async (e) => {
+  const input = document.getElementById("composerInput");
+  const form = document.getElementById("composerForm");
+  if (input) {
+    input.addEventListener("input", () => {
+      input.style.height = "auto";
+      input.style.height = `${input.scrollHeight}px`;
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        form.requestSubmit();
+      }
+    });
+  }
+  form?.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (!myStaffProfile) { openStaffProfileDialog(); return; }
-    const input = document.getElementById("composerInput");
     const text = input.value;
     input.value = "";
+    input.style.height = "auto";
     try {
-      await sendTicketMessage(id, text, { isStaff: true, staffName: myStaffProfile.displayName });
+      await sendTicketMessage(id, text, { isStaff: true, staffName: myStaffProfile.displayName, currentStatus: ticket.status });
     } catch (err) { console.error(err); }
   });
 }
@@ -155,10 +281,424 @@ function renderMessages(messages) {
   if (!el) return;
   el.innerHTML = messages.map(m => `
     ${m.senderId !== currentUid ? `<div class="thread-sender-name">${escapeHtml(m.senderName)}${m.senderRole === "staff" ? " · Staff" : ""}</div>` : ""}
-    <div class="thread-bubble ${m.senderId === currentUid ? "mine" : ""}">${escapeHtml(m.text)}</div>
+    <div class="thread-bubble ${m.senderId === currentUid ? "mine" : ""}">${escapeHtml(m.text).replace(/\n/g, "<br>")}</div>
   `).join("") || `<p class="state-message">No messages yet.</p>`;
   el.scrollTop = el.scrollHeight;
 }
+
+// ================= Users =================
+
+function renderUsersSection(body) {
+  body.innerHTML = `
+    ${!adminWorkerConfigured() ? `<p class="demo-note" style="margin-bottom:16px">The admin Worker isn't configured yet (js/admin-config.js) — user management is unavailable until it's deployed. See README §11.</p>` : ""}
+    <div class="search-field" style="border:1px solid #ddd;border-radius:14px;padding:4px 18px;max-width:420px;margin-bottom:20px">
+      <span>⌕</span>
+      <input id="userSearchInput" type="search" placeholder="Search by email…" autocomplete="off">
+    </div>
+    <div id="userListBody"><p class="state-message">Loading users…</p></div>
+  `;
+  const searchInput = document.getElementById("userSearchInput");
+  let debounceTimer;
+  searchInput.addEventListener("input", () => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => loadUsers(searchInput.value.trim()), 300);
+  });
+  loadUsers("");
+}
+
+async function loadUsers(search) {
+  const listBody = document.getElementById("userListBody");
+  if (!listBody) return;
+  if (!adminWorkerConfigured()) { listBody.innerHTML = ""; return; }
+
+  listBody.innerHTML = `<p class="state-message">Loading users…</p>`;
+  try {
+    const { users } = search ? await searchUsersByEmail(search) : await listUsers();
+    if (!users.length) { listBody.innerHTML = `<p class="state-message">No users found.</p>`; return; }
+    listBody.innerHTML = `<div class="manage-list">${users.map(userRow).join("")}</div>`;
+    users.forEach(wireUserActions);
+  } catch (err) {
+    console.error(err);
+    listBody.innerHTML = `<p class="state-message">Couldn't load users: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function userRow(u) {
+  return `<div class="manage-row" style="flex-wrap:wrap">
+    <div class="manage-info">
+      <h3>${escapeHtml(u.displayName || "(no name)")} ${u.disabled ? '<span class="status-badge status-declined">disabled</span>' : ""}</h3>
+      <div class="manage-meta">${escapeHtml(u.email)} · ${u.providerIds.length ? u.providerIds.join(", ") : "email/password"} · joined ${fmtEpochMs(u.createdAt)}</div>
+    </div>
+    <div class="manage-actions">
+      <a class="chip-btn" href="profile.html?uid=${u.uid}" target="_blank">View profile</a>
+      <button class="chip-btn" id="reset-${u.uid}">Send password reset</button>
+      <button class="chip-btn" id="signout-${u.uid}">Force sign-out</button>
+      <button class="chip-btn ${u.disabled ? "" : "danger"}" id="toggle-disabled-${u.uid}">${u.disabled ? "Enable account" : "Disable account"}</button>
+      <button class="chip-btn danger" id="delete-user-${u.uid}">Delete account</button>
+    </div>
+  </div>`;
+}
+
+function wireUserActions(u) {
+  document.getElementById(`reset-${u.uid}`)?.addEventListener("click", async (e) => {
+    e.target.disabled = true; e.target.textContent = "Sending…";
+    try {
+      await sendPasswordReset(u.uid, u.email);
+      await logStaffAction("send_password_reset", "user", u.uid, u.email);
+      e.target.textContent = "Sent";
+    } catch (err) { console.error(err); alert(err.message); e.target.disabled = false; e.target.textContent = "Send password reset"; }
+  });
+
+  document.getElementById(`signout-${u.uid}`)?.addEventListener("click", async (e) => {
+    e.target.disabled = true; e.target.textContent = "Signing out…";
+    try {
+      await forceSignOut(u.uid);
+      await logStaffAction("force_sign_out", "user", u.uid, u.email);
+      e.target.textContent = "Signed out everywhere";
+    } catch (err) { console.error(err); alert(err.message); e.target.disabled = false; e.target.textContent = "Force sign-out"; }
+  });
+
+  document.getElementById(`toggle-disabled-${u.uid}`)?.addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try {
+      await setAccountDisabled(u.uid, !u.disabled);
+      await logStaffAction(u.disabled ? "enable_account" : "disable_account", "user", u.uid, u.email);
+      loadUsers(document.getElementById("userSearchInput")?.value.trim() || "");
+    } catch (err) { console.error(err); alert(err.message); e.target.disabled = false; }
+  });
+
+  document.getElementById(`delete-user-${u.uid}`)?.addEventListener("click", async (e) => {
+    const typed = prompt(`This permanently deletes ${u.email}'s login. Their listings/reviews/messages are NOT automatically removed. Type their email to confirm:`);
+    if (typed !== u.email) return;
+    e.target.disabled = true; e.target.textContent = "Deleting…";
+    try {
+      await deleteAccount(u.uid);
+      await logStaffAction("delete_account", "user", u.uid, u.email);
+      loadUsers(document.getElementById("userSearchInput")?.value.trim() || "");
+    } catch (err) { console.error(err); alert(err.message); e.target.disabled = false; e.target.textContent = "Delete account"; }
+  });
+}
+
+// ================= Listings =================
+
+function renderListingsSection(body) {
+  body.innerHTML = `
+    <div class="search-field" style="border:1px solid #ddd;border-radius:14px;padding:4px 18px;max-width:420px;margin-bottom:20px">
+      <span>⌕</span>
+      <input id="listingSearchInput" type="search" placeholder="Search by title or owner…" autocomplete="off">
+    </div>
+    <div class="messages-layout">
+      <aside class="conversation-list" id="listingList"><p class="state-message">Loading listings…</p></aside>
+      <section class="thread-panel" id="listingDetail">
+        <div class="empty-thread"><div class="empty-thread-icon">🏷️</div><h3>No listing selected</h3><p>Pick one to see its details and rental history.</p></div>
+      </section>
+    </div>
+  `;
+  document.getElementById("listingSearchInput").addEventListener("input", (e) => renderListingList(e.target.value.trim().toLowerCase()));
+  loadListings();
+}
+
+async function loadListings() {
+  try {
+    allListingsCache = await fetchAllListingsForStaff();
+    renderListingList("");
+  } catch (err) {
+    console.error(err);
+    const el = document.getElementById("listingList");
+    if (el) el.innerHTML = `<p class="state-message">Couldn't load listings.</p>`;
+  }
+}
+
+function renderListingList(query) {
+  const el = document.getElementById("listingList");
+  if (!el) return;
+  const filtered = query
+    ? allListingsCache.filter(l => `${l.title} ${l.ownerName}`.toLowerCase().includes(query))
+    : allListingsCache;
+
+  if (!filtered.length) { el.innerHTML = `<p class="state-message">No listings found.</p>`; return; }
+
+  el.innerHTML = filtered.map(l => `
+    <button type="button" class="conversation-row ${l.id === activeListingId ? "active" : ""}" data-id="${l.id}">
+      <div class="conversation-row-top">
+        <span class="conversation-title">${escapeHtml(l.title)}</span>
+        <span class="status-badge status-${l.available ? "accepted" : "declined"}" style="font-size:9px">${l.available ? "live" : "hidden"}</span>
+      </div>
+      <div class="conversation-preview">${escapeHtml(l.ownerName || "")} · $${l.pricePerDay}/day</div>
+    </button>`).join("");
+
+  el.querySelectorAll(".conversation-row").forEach(btn => {
+    btn.addEventListener("click", () => openListingDetail(btn.dataset.id));
+  });
+}
+
+async function openListingDetail(id) {
+  activeListingId = id;
+  document.querySelectorAll("#listingList .conversation-row").forEach(b => b.classList.toggle("active", b.dataset.id === id));
+  const panel = document.getElementById("listingDetail");
+  const listing = allListingsCache.find(l => l.id === id);
+  if (!panel || !listing) return;
+
+  panel.innerHTML = `<p class="state-message">Loading rental history…</p>`;
+  let history = [];
+  try { history = await fetchRequestsForListing(id); } catch (err) { console.error(err); }
+
+  const img = (listing.imageUrls && listing.imageUrls[0]) || "https://placehold.co/300x200?text=No+photo";
+  panel.innerHTML = `
+    <div style="padding:22px;overflow-y:auto;height:100%">
+      <div style="display:flex;gap:16px;align-items:flex-start">
+        <img src="${img}" alt="" style="width:96px;height:96px;border-radius:12px;object-fit:cover;flex-shrink:0">
+        <div style="flex:1;min-width:0">
+          <h3 style="margin:0 0 4px">${escapeHtml(listing.title)}</h3>
+          <div class="listing-meta">${escapeHtml(listing.ownerName || "")} · $${listing.pricePerDay}/day${listing.depositAmount ? ` · $${listing.depositAmount} deposit` : ""}</div>
+          <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+            <a class="chip-btn" href="product.html?id=${id}" target="_blank">View listing</a>
+            <a class="chip-btn" href="profile.html?uid=${listing.ownerId}" target="_blank">View owner</a>
+            <button class="chip-btn" id="toggle-listing-${id}">${listing.available ? "Hide" : "Show"}</button>
+            <button class="chip-btn danger" id="delete-listing-${id}">Delete</button>
+          </div>
+        </div>
+      </div>
+      <h4 style="margin:26px 0 12px;font-size:14px">Rental history (${history.length})</h4>
+      ${history.length ? history.map(rentalHistoryRow).join("") : `<p class="state-message">No rentals yet.</p>`}
+    </div>
+  `;
+
+  document.getElementById(`toggle-listing-${id}`)?.addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try {
+      await setListingAvailability(id, !listing.available);
+      await logStaffAction("toggle_listing_visibility", "listing", id, listing.available ? "hidden" : "shown");
+      await loadListings();
+      openListingDetail(id);
+    } catch (err) { console.error(err); e.target.disabled = false; }
+  });
+
+  document.getElementById(`delete-listing-${id}`)?.addEventListener("click", async (e) => {
+    if (!confirm(`Permanently delete "${listing.title}"? This can't be undone.`)) return;
+    e.target.disabled = true;
+    try {
+      await deleteListing(id);
+      await logStaffAction("delete_listing", "listing", id, listing.title);
+      allListingsCache = allListingsCache.filter(l => l.id !== id);
+      renderListingList(document.getElementById("listingSearchInput")?.value.trim().toLowerCase() || "");
+      panel.innerHTML = `<div class="empty-thread"><div class="empty-thread-icon">🏷️</div><h3>Listing deleted</h3></div>`;
+    } catch (err) { console.error(err); e.target.disabled = false; }
+  });
+}
+
+function rentalHistoryRow(r) {
+  const photos = [
+    ...(r.pickupPhotoUrls || []).map(u => ({ u, label: "Pickup" })),
+    ...(r.returnPhotoUrls || []).map(u => ({ u, label: "Return" })),
+    ...(r.claimPhotoUrls || []).map(u => ({ u, label: "Damage claim" }))
+  ];
+  return `<div class="manage-row" style="flex-wrap:wrap;margin-bottom:10px">
+    <div class="manage-info">
+      <div class="manage-meta">${fmtDate(r.startDate)} → ${fmtDate(r.endDate)} · $${r.totalPrice}</div>
+      ${r.depositAmount ? `<div class="manage-meta">Deposit: $${r.depositAmount} — ${escapeHtml(r.depositStatus)}${r.claimedAmount ? ` ($${r.claimedAmount} claimed: ${escapeHtml(r.claimReason || "")})` : ""}</div>` : ""}
+      ${photos.length ? `<div class="manage-meta">${photos.map(p => `<a href="${p.u}" target="_blank" rel="noopener" class="text-link">${p.label}</a>`).join(" · ")}</div>` : ""}
+    </div>
+    <span class="status-badge status-${r.status}">${r.status}</span>
+  </div>`;
+}
+
+// ================= Status Page =================
+
+let statusComponentsCache = [];
+let unsubStatusComponents = null;
+let unsubStatusIncidents = null;
+
+function renderStatusSection(body) {
+  body.innerHTML = `
+    <div class="dash-header">
+      <h3 style="margin:0;font-size:16px">Components</h3>
+      <button class="chip-btn" id="addComponentBtn">Add component</button>
+    </div>
+    <div id="componentList" style="margin-top:14px"><p class="state-message">Loading…</p></div>
+
+    <div class="dash-header" style="margin-top:44px">
+      <h3 style="margin:0;font-size:16px">Incidents</h3>
+      <button class="chip-btn" id="newIncidentBtn">Report incident</button>
+    </div>
+    <div id="incidentList" style="margin-top:14px"><p class="state-message">Loading…</p></div>
+  `;
+
+  document.getElementById("addComponentBtn").addEventListener("click", openAddComponentDialog);
+  document.getElementById("newIncidentBtn").addEventListener("click", openNewIncidentDialog);
+
+  unsubStatusComponents?.();
+  unsubStatusComponents = subscribeComponents(items => {
+    statusComponentsCache = items;
+    renderComponentList();
+  });
+  unsubStatusIncidents?.();
+  unsubStatusIncidents = subscribeIncidents(items => renderIncidentList(items));
+}
+
+function renderComponentList() {
+  const el = document.getElementById("componentList");
+  if (!el) return;
+  if (!statusComponentsCache.length) {
+    el.innerHTML = `<p class="state-message">No components yet — add one to start the status page.</p>`;
+    return;
+  }
+  el.innerHTML = statusComponentsCache.map(c => `
+    <div class="manage-row" style="flex-wrap:wrap">
+      <div class="manage-info"><h3>${escapeHtml(c.name)}</h3></div>
+      <select class="chip-btn" id="status-select-${c.id}" style="padding:8px 12px">
+        ${COMPONENT_STATUSES.map(s => `<option value="${s.id}" ${s.id === c.status ? "selected" : ""}>${s.label}</option>`).join("")}
+      </select>
+      <div class="manage-actions">
+        <button class="chip-btn" id="rename-${c.id}">Rename</button>
+        <button class="chip-btn danger" id="delete-component-${c.id}">Delete</button>
+      </div>
+    </div>`).join("");
+
+  statusComponentsCache.forEach(c => {
+    document.getElementById(`status-select-${c.id}`)?.addEventListener("change", async (e) => {
+      try {
+        await updateComponentStatus(c.id, e.target.value);
+        await logStaffAction("update_component_status", "statusComponent", c.id, `${c.name} -> ${e.target.value}`);
+      } catch (err) { console.error(err); }
+    });
+    document.getElementById(`rename-${c.id}`)?.addEventListener("click", async () => {
+      const name = prompt("Rename component:", c.name);
+      if (!name || !name.trim()) return;
+      try { await renameComponent(c.id, name); } catch (err) { console.error(err); }
+    });
+    document.getElementById(`delete-component-${c.id}`)?.addEventListener("click", async (e) => {
+      if (!confirm(`Remove "${c.name}" from the status page?`)) return;
+      e.target.disabled = true;
+      try { await deleteComponent(c.id); } catch (err) { console.error(err); e.target.disabled = false; }
+    });
+  });
+}
+
+function openAddComponentDialog() {
+  const name = prompt("Component name (e.g. \"Website\", \"Messaging\", \"Payments\"):");
+  if (!name || !name.trim()) return;
+  createComponent(name).catch(err => { console.error(err); alert("Couldn't add that component."); });
+}
+
+function renderIncidentList(incidents) {
+  const el = document.getElementById("incidentList");
+  if (!el) return;
+  if (!incidents.length) {
+    el.innerHTML = `<p class="state-message">No incidents reported.</p>`;
+    return;
+  }
+  el.innerHTML = incidents.map(incident => `
+    <div class="incident-card">
+      <div class="incident-card-top">
+        <h3>${escapeHtml(incident.title)}</h3>
+        <span class="status-pill status-pill-impact-${incident.impact}">${escapeHtml(incident.impact)}</span>
+      </div>
+      <div class="incident-timeline">
+        ${[...(incident.updates || [])].reverse().map(u => `
+          <div class="incident-update">
+            <div class="incident-update-top"><strong>${escapeHtml((INCIDENT_STATUSES.find(s => s.id === u.status) || {}).label || u.status)}</strong><span class="review-date">${fmtDate(u.createdAt)}</span></div>
+            <p>${escapeHtml(u.message)}</p>
+          </div>`).join("")}
+      </div>
+      <div class="manage-actions" style="margin-top:16px">
+        ${incident.status !== "resolved" ? `<button class="chip-btn" id="update-incident-${incident.id}">Post update</button>` : ""}
+        <button class="chip-btn danger" id="delete-incident-${incident.id}">Delete</button>
+      </div>
+    </div>`).join("");
+
+  incidents.forEach(incident => {
+    document.getElementById(`update-incident-${incident.id}`)?.addEventListener("click", () => openIncidentUpdateDialog(incident));
+    document.getElementById(`delete-incident-${incident.id}`)?.addEventListener("click", async (e) => {
+      if (!confirm(`Delete "${incident.title}" from the incident history? This can't be undone.`)) return;
+      e.target.disabled = true;
+      try { await deleteIncident(incident.id); } catch (err) { console.error(err); e.target.disabled = false; }
+    });
+  });
+}
+
+function openNewIncidentDialog() {
+  const overlay = document.createElement("div");
+  overlay.className = "review-overlay";
+  overlay.innerHTML = `
+    <div class="review-dialog">
+      <h3 style="margin:0 0 4px">Report an incident</h3>
+      <p class="muted" style="margin:0 0 18px">This shows up on the public status page immediately.</p>
+      <label style="font-weight:600;font-size:13px">Title<input id="incidentTitle" type="text" maxlength="150" style="width:100%;border:1px solid #ddd;border-radius:11px;padding:12px;margin-top:6px" placeholder="e.g. Messages not sending"></label>
+      <label style="font-weight:600;font-size:13px;display:block;margin-top:14px">Impact<select id="incidentImpact" style="width:100%;border:1px solid #ddd;border-radius:11px;padding:12px;margin-top:6px">
+        <option value="minor">Minor</option><option value="major">Major</option><option value="critical">Critical</option>
+      </select></label>
+      <label style="font-weight:600;font-size:13px;display:block;margin-top:14px">Initial update<textarea id="incidentMessage" rows="3" maxlength="500" style="width:100%;border:1px solid #ddd;border-radius:11px;padding:12px;margin-top:6px;font-family:inherit" placeholder="What's happening, what you know so far"></textarea></label>
+      <p id="incidentDialogError" class="auth-error hidden"></p>
+      <div style="display:flex;gap:10px;margin-top:18px">
+        <button class="primary-button" id="incidentSubmit" style="flex:1">Post incident</button>
+        <button class="chip-btn" id="incidentCancel">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  overlay.querySelector("#incidentCancel").addEventListener("click", () => overlay.remove());
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+
+  overlay.querySelector("#incidentSubmit").addEventListener("click", async () => {
+    const errorBox = overlay.querySelector("#incidentDialogError");
+    const title = overlay.querySelector("#incidentTitle").value.trim();
+    const impact = overlay.querySelector("#incidentImpact").value;
+    const message = overlay.querySelector("#incidentMessage").value.trim();
+    if (!title) { errorBox.textContent = "Give the incident a title."; errorBox.classList.remove("hidden"); return; }
+    if (!message) { errorBox.textContent = "Add an initial update."; errorBox.classList.remove("hidden"); return; }
+    try {
+      await createIncident({ title, impact, message });
+      await logStaffAction("create_incident", "statusIncident", title, impact);
+      overlay.remove();
+    } catch (err) {
+      console.error(err);
+      errorBox.textContent = "Couldn't post the incident. Try again.";
+      errorBox.classList.remove("hidden");
+    }
+  });
+}
+
+function openIncidentUpdateDialog(incident) {
+  const overlay = document.createElement("div");
+  overlay.className = "review-overlay";
+  overlay.innerHTML = `
+    <div class="review-dialog">
+      <h3 style="margin:0 0 4px">Post an update</h3>
+      <p class="muted" style="margin:0 0 18px">${escapeHtml(incident.title)}</p>
+      <label style="font-weight:600;font-size:13px">Status<select id="updateStatus" style="width:100%;border:1px solid #ddd;border-radius:11px;padding:12px;margin-top:6px">
+        ${INCIDENT_STATUSES.map(s => `<option value="${s.id}" ${s.id === incident.status ? "selected" : ""}>${s.label}</option>`).join("")}
+      </select></label>
+      <label style="font-weight:600;font-size:13px;display:block;margin-top:14px">Message<textarea id="updateMessage" rows="3" maxlength="500" style="width:100%;border:1px solid #ddd;border-radius:11px;padding:12px;margin-top:6px;font-family:inherit" placeholder="What's changed"></textarea></label>
+      <p id="updateDialogError" class="auth-error hidden"></p>
+      <div style="display:flex;gap:10px;margin-top:18px">
+        <button class="primary-button" id="updateSubmit" style="flex:1">Post update</button>
+        <button class="chip-btn" id="updateCancel">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  overlay.querySelector("#updateCancel").addEventListener("click", () => overlay.remove());
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+
+  overlay.querySelector("#updateSubmit").addEventListener("click", async () => {
+    const errorBox = overlay.querySelector("#updateDialogError");
+    const status = overlay.querySelector("#updateStatus").value;
+    const message = overlay.querySelector("#updateMessage").value.trim();
+    if (!message) { errorBox.textContent = "Add a message for this update."; errorBox.classList.remove("hidden"); return; }
+    try {
+      await addIncidentUpdate(incident, { status, message });
+      await logStaffAction("update_incident", "statusIncident", incident.title, status);
+      overlay.remove();
+    } catch (err) {
+      console.error(err);
+      errorBox.textContent = "Couldn't post the update. Try again.";
+      errorBox.classList.remove("hidden");
+    }
+  });
+}
+
+// ================= Staff support identity dialog =================
 
 function openStaffProfileDialog() {
   const overlay = document.createElement("div");

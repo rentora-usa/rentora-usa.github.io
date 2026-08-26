@@ -6,9 +6,107 @@ Rentora is a peer-to-peer rental marketplace running on a live Firebase backend:
 
 ---
 
-## 9. This round: deposits, damage claims, and why payments aren't live yet
+## 12. This round: ticket lifecycle tracker, Shift+Enter, and a status page
 
-**Short version: nothing charges real money yet, on purpose.** Payment operations (charges, deposit holds, refunds) require a secret key that can never live in frontend code — it has to run on a server you control. Rentora doesn't have one of those connected yet (no Stripe account, Firebase still on the free Spark plan, which can't make outbound API calls from Cloud Functions anyway). Building fake-but-convincing payment UI before that exists would risk misleading real users about their actual financial exposure, so instead this round builds the **decision layer**: everything that determines what *should* happen to a deposit, recorded correctly and ready to execute for real the moment a payment backend exists.
+### Support tickets now have a real 5-stage lifecycle
+
+Tickets used to just be open/closed. They now move through **Received → Read → In Progress → Resolved → Closed**, shown as a circle/line tracker (like a package-tracking UI) at the top of the thread on both `support.html` and `admin.html`:
+
+- **Received** — the moment a ticket is created.
+- **Read** — set automatically the first time a staff member opens it. No button, no manual step.
+- **In Progress** — set automatically the first time staff actually reply. Staff can also jump here manually (a "Mark in progress" button) without waiting for that.
+- **Resolved** — staff-only, manual ("Mark resolved").
+- **Closed** — either side can close it. **Closed is enforced as a hard stop in `firestore.rules`, not just hidden in the UI** — nobody, staff included, can post another message into a closed ticket via any path until it's reopened. Reopening (either side can do it) resets it to "Received," so it gets re-triaged rather than picking up wherever it left off.
+
+`js/support.js` has the full state machine (`TICKET_STAGES`, `markTicketRead`, `setTicketStage`, `closeTicket`, `reopenTicket`); `firestore.rules`' `supportTickets` block enforces who can move it where — staff have full control across all 5 stages, the ticket owner can only close or reopen.
+
+### Shift+Enter for multi-line replies
+
+Both `support-page.js` (user side) and `admin.js` (staff side) now use an auto-growing `<textarea>` for the composer instead of a single-line input: **Enter sends, Shift+Enter inserts a line break.** Line breaks render correctly in the message bubbles on both sides.
+
+### A status page, Discord-style
+
+- **`status.html`** — public, no login needed. A banner ("All systems operational" / degraded / partial or major outage, computed from the worst component status live), a list of components with colored status pills, and an incident history below each with its own timestamped update timeline.
+- **Admin panel → Status Page tab** — staff can add/rename/delete components, change any component's status via a dropdown, and post incidents. Each incident starts with a title + impact level + initial update, and staff can post further updates (changing status through investigating → identified → monitoring → resolved) — all Discord-style, one incident accumulating a timeline rather than separate posts.
+- Public read, staff-only write — same pattern as everything else (`isStaff()` in `firestore.rules`).
+
+### Data model additions
+
+```text
+supportTickets/{id}     status is now received|read|in_progress|resolved|closed (was open|closed)
+statusComponents/{id}    name, status (operational|degraded|partial_outage|major_outage), order, updatedAt
+statusIncidents/{id}     title, impact (minor|major|critical), status (investigating|identified|monitoring|resolved),
+                         updates[{status, message, createdAt}], createdAt, updatedAt, resolvedAt
+```
+
+---
+
+## 11. This round: staff account management, listing moderation, and pickup/return photos
+
+Three additions, all staff-facing:
+
+### Staff can now manage user accounts — but never see a password
+
+This came up because it was asked for directly, so it's worth being explicit: **Firebase Auth never stores a password anywhere in recoverable form** — not in the database, not in the console, not anywhere. There's no version of this feature where staff (or anyone) can see what a user's password is, including me building it for you. What's actually possible, and what's now in `admin.html`'s **Users** tab:
+
+- **Browse and search every account** by email (`js/admin-users.js` → `admin-worker/`)
+- **Disable / re-enable an account** — immediately blocks sign-in
+- **Force sign-out everywhere** — invalidates all of that user's existing sessions/tokens right now, which is a stronger and faster action than disabling alone if you need to cut someone off immediately
+- **Send a password reset email** — the user resets it themselves via Firebase's own flow; staff never see or set the actual value
+- **Delete an account** — permanent, requires typing the person's email to confirm. This deletes their Firebase Auth login only; their Firestore data (listings, reviews, messages) isn't automatically cleaned up — see the note in the code if you want to build that cleanup later.
+
+This needed a **new backend Worker** (`admin-worker/`), for the same reason the payments Worker did: managing accounts requires Firebase's Identity Toolkit admin API, which needs a privileged service-account credential that can never live in frontend code. Deployment is the same shape as `payments-worker/` (see §10 below) — Cloudflare Workers, a Firebase service account as a secret, and a URL you paste into `js/admin-config.js`. If you already generated a service account key for the payments Worker, the same key works here too.
+
+Every action requires the caller to actually have a `staff/{uid}` Firestore doc — checked independently by the Worker itself via the same service account, not trusted from the client — and every action is written to a new `adminAuditLog` collection (who did what, to which account, when), readable from the admin panel by any staff member.
+
+### Staff can now moderate any listing
+
+`firestore.rules` now lets `isStaff()` hide, show, or delete any listing, not just the owner. `admin.html`'s new **Listings** tab lets staff search every listing on the platform, open one, and see its full rental history — every request against it, with status and deposit outcome — directly from the same panel used for ticket investigation.
+
+### Pickup/return condition photos
+
+Rentals now carry two new photo arrays: `pickupPhotoUrls` and `returnPhotoUrls`, alongside the existing `claimPhotoUrls` used for damage claims. From an accepted rental in their Dashboard, an owner can add pickup photos (documenting condition before the rental) and return photos (after) — separate from, and in addition to, the damage-specific evidence attached to an actual claim. Staff investigating a dispute can see all three photo sets together on a listing's rental history in the admin panel, which is the difference between "he-said-she-said" and an actual paper trail.
+
+Staff can also add these photos themselves (`firestore.rules` allows either the owner or `isStaff()`) — useful if an owner won't cooperate during an active dispute and support needs to capture what's available directly.
+
+### Deploying admin-worker/
+
+**No local tools, entirely in the browser:** use `admin-worker/admin-worker-bundle.js` — it's `admin-worker/src/*.js` merged into one dependency-free file. Go to [dash.cloudflare.com](https://dash.cloudflare.com) → **Workers & Pages → Create → Create Worker**, give it a name, open the online editor, paste the bundle's contents in, and hit **Deploy**. Then, in that Worker's **Settings → Variables** tab: add `FIREBASE_PROJECT_ID` (`rentora-415ca`), `FIREBASE_API_KEY`, and `ALLOWED_ORIGIN` (`*` to start) as plain variables, and `FIREBASE_SERVICE_ACCOUNT_JSON` (the full service-account key file contents) as an **encrypted** variable — click "Encrypt" on it before saving. The bundle file has these same instructions in a comment at the top.
+
+**With local tools (Node.js + terminal):** the `src/` folder's multi-file version, deployed via Wrangler:
+
+1. `cd admin-worker && npm install`
+2. `npx wrangler login`
+3. `npx wrangler secret put FIREBASE_SERVICE_ACCOUNT_JSON` — paste the service account JSON contents
+4. `npx wrangler deploy`
+
+Either path ends the same way: copy the Worker's URL and paste it into `ADMIN_WORKER_URL` in `js/admin-config.js`, then redeploy your site.
+
+Once that's done, the Users tab in `admin.html` goes from "not configured yet" to fully working — no other code changes needed.
+
+### Data model additions
+
+```text
+rentalRequests/{id}   + pickupPhotoUrls (string[], ≤20)
+                       + returnPhotoUrls (string[], ≤20)
+staff/{uid}             (unchanged shape — now also gated at the Worker level, not just firestore.rules)
+adminAuditLog/{id}      staffId, staffName, action, targetType, targetId, details, createdAt
+                        — staff-readable, append-only, never editable/deletable
+```
+
+---
+
+## 10. A previous round: real deposit holds via Stripe test mode (optional, currently paused)
+
+This was built as **Option A** from an earlier conversation — a Cloudflare Worker (`payments-worker/`) that creates real (test-mode) Stripe authorization holds for deposits, rather than the ledger-only tracking described in §9 below. It's complete and functional but **not required for anything else in this document to work** — the deposit ledger, damage claims, and the automatic overdue rule all run fine without it (`depositPaymentIntentId` just stays empty, and `js/rentals.js` falls back to the plain Firestore-write path automatically).
+
+If you want to pick this back up: `payments-worker/README` — actually there isn't a separate one, the deployment shape is: `wrangler secret put STRIPE_SECRET_KEY` and `wrangler secret put FIREBASE_SERVICE_ACCOUNT_JSON`, then `wrangler deploy`, then fill in `PAYMENTS_WORKER_URL` and `STRIPE_PUBLISHABLE_KEY` in `js/payments-config.js`. The one piece left unfinished when this was paused: `product.js` doesn't yet collect a card via Stripe Elements at booking time, so even with the Worker deployed, bookings still go through the ledger-only path today. Worth knowing if you come back to this later.
+
+---
+
+## 9. An earlier round: deposits, damage claims, and why payments aren't live yet
+
+**Short version: nothing charges real money by default.** Payment operations (charges, deposit holds, refunds) require a secret key that can never live in frontend code — it has to run on a server you control. §10 above describes the optional path that does connect real (test-mode) holds; absent that, this section describes the always-available ledger-only fallback.
 
 ### What's here now
 
@@ -154,10 +252,11 @@ listings/{listingId}     ownerId, ownerName, title, description, category, subca
                           reviewCount, available, bookedRanges[{start,end}], createdAt, updatedAt
 rentalRequests/{id}      listingId, ownerId, renterId, startDate (Timestamp), endDate (Timestamp),
                           totalPrice, status (pending|accepted|declined|cancelled|completed),
-                          depositAmount, returnDeadline (Timestamp), returnedAt (Timestamp|null),
-                          depositStatus (n/a|pending|released|claimed), claimedAmount,
-                          claimReason, claimPhotoUrls[], claimedAt (Timestamp|null),
-                          createdAt, updatedAt
+                          depositAmount, depositPaymentIntentId, returnDeadline (Timestamp),
+                          returnedAt (Timestamp|null),
+                          depositStatus (n/a|pending|authorized|released|claimed|captured),
+                          claimedAmount, claimReason, claimPhotoUrls[], claimedAt (Timestamp|null),
+                          pickupPhotoUrls[], returnPhotoUrls[], createdAt, updatedAt
 reviews/{id}              listingId, rentalRequestId, authorId, targetUserId, rating, text, createdAt
                           — doc id is "{rentalRequestId}_{authorId}"
 conversations/{id}        listingId, listingTitle, ownerId, renterId, participants[2],
@@ -165,9 +264,19 @@ conversations/{id}        listingId, listingTitle, ownerId, renterId, participan
                           — doc id is "{listingId}_{renterId}"
   /messages/{messageId}    senderId, text, createdAt
 staff/{uid}                displayName, photoURL — see §8, created manually
-supportTickets/{id}        userId, userName, subject, status, assignedStaffId,
-                          assignedStaffName, lastMessage, lastMessageAt, lastSenderId, createdAt
+supportTickets/{id}        userId, userName, subject,
+                          status (received|read|in_progress|resolved|closed — see §12),
+                          assignedStaffId, assignedStaffName, lastMessage, lastMessageAt,
+                          lastSenderId, createdAt
   /messages/{messageId}    senderId, senderRole, senderName, text, createdAt
+adminAuditLog/{id}          staffId, staffName, action, targetType, targetId, details, createdAt
+                          — staff-readable, append-only, see §11
+statusComponents/{id}        name, status (operational|degraded|partial_outage|major_outage),
+                          order, updatedAt — public read, staff write, see §12
+statusIncidents/{id}         title, impact (minor|major|critical),
+                          status (investigating|identified|monitoring|resolved),
+                          updates[{status, message, createdAt}], createdAt, updatedAt,
+                          resolvedAt — public read, staff write, see §12
 ```
 
 ### Renting: fluid and secured, with one honest gap
@@ -180,12 +289,13 @@ supportTickets/{id}        userId, userName, subject, status, assignedStaffId,
 
 ### Security rules
 
-Deploy `firestore.rules` via **Firebase Console → Firestore → Rules → Publish** (or `firebase deploy --only firestore:rules`) — **this step is required every time the rules file changes**, including the fixes in §8. On top of collection-specific validation, they also:
+Deploy `firestore.rules` via **Firebase Console → Firestore → Rules → Publish** (or `firebase deploy --only firestore:rules`) — **this step is required every time the rules file changes**. On top of collection-specific validation, they also:
 - Prevent a listing owner from forging `rating`/`reviewCount` on their own listing.
 - Lock `rentalRequests` status transitions to exactly what the owner/renter are each allowed to do.
 - Keep `users.email`/`createdAt` immutable after signup.
 - Restrict `conversations` and `supportTickets` (and their `messages` subcollections) to participants only, with a `resource == null` fallback so checking "does this exist yet" never itself gets denied.
-- Gate `admin.html` functionality via `isStaff()`, which checks for a `staff/{uid}` doc that only a human with console access can create.
+- Gate `admin.html` functionality — including listing moderation and reading any rental request — via `isStaff()`, which checks for a `staff/{uid}` doc that only a human with console access can create.
+- Let either the owner or staff attach pickup/return condition photos to a rental, capped at 20 each.
 
 Treat this as a strong starting point, not a final audit.
 
@@ -206,39 +316,53 @@ js/
   categories.js          Static category/subcategory taxonomy
   auth.js                 Email/password + Google + Apple sign-in (login.html)
   header-auth.js          Account dropdown, unread badge, staff-admin link, fluid sign-in/out, page guards
-  listings.js              Listings CRUD, booked-date ranges, conflict check
-  rentals.js                Rental request CRUD, real-time dashboard subscriptions, deposit ledger
-  messages.js                Peer conversations + real-time messages (fixed this round — see §8)
+  listings.js              Listings CRUD, booked-date ranges, conflict check, staff "all listings" query
+  rentals.js                Rental request CRUD, real-time subscriptions, deposit ledger, pickup/return photos
+  messages.js                Peer conversations + real-time messages
   reviews.js                  Submit/fetch reviews, live average-rating computation
-  support.js                  Support tickets: create, subscribe, reply, claim, staff profile
+  support.js                  Support tickets: 5-stage lifecycle, subscribe, reply, claim, staff profile
+  status.js                     Status page data: components + incidents (public read, staff write)
+  payments.js                  Client for payments-worker/ (optional — see §10)
+  payments-config.js            PAYMENTS_WORKER_URL / STRIPE_PUBLISHABLE_KEY (optional)
+  admin-users.js                Client for admin-worker/ — user account management
+  admin-config.js               ADMIN_WORKER_URL
+  help-content.js                Help Center article/category data
   app.js                   Homepage: featured listings
   search.js                 Search/browse page
   product.js                 Product page: request-to-rent, conflict check, message owner, owner rating
   create-listing.js          "List an item" form — also handles editing via ?id=
   settings.js                  Settings: profile editing, account info, sign out
-  dashboard.js                 Manage listings, live requests, accept/decline/review, deposit resolution
+  dashboard.js                 Manage listings, live requests, accept/decline/review, deposit + photo docs
   profile.js                    Public profile: star rating + reviews + active listings
   messages-page.js              Peer messages: conversation list + thread
-  support-page.js                End-user support: ticket list + new ticket + thread
-  admin.js                        Staff admin panel: ticket queue, claim/respond, staff identity
+  support-page.js                End-user support: ticket list, stage tracker, Shift+Enter composer
+  status-page.js                  Public status page: banner + components + incident history
+  help.js                           Help Center: home/category/article/search views
+  admin.js                          Staff admin panel: Tickets / Users / Listings / Status Page sections
+
+payments-worker/    Optional Cloudflare Worker for real Stripe test-mode deposit holds — see §10
+admin-worker/       Cloudflare Worker for staff user-account management — see §11
 
 Pages: index.html, about.html, search.html, product.html, login.html,
        create-listing.html, settings.html, dashboard.html, messages.html,
-       profile.html, help.html, support.html, admin.html, 404.html
+       profile.html, help.html, support.html, admin.html, status.html, 404.html
 ```
 
 ---
 
 ## 7. What to build next
 
-1. **Real payments** — Stripe Connect + Cloud Functions, executing the deposit decisions §9 already records. This is the big one; see §9 for the concrete steps when you're ready.
-2. **Server-side booking transactions** — close the double-booking race described in §4 with a Cloud Function (can likely ship alongside #1, same Blaze/Cloud Functions upgrade).
-3. **A real scheduled job for the overdue-deposit rule** — moves `applyOverdueDepositRule()` from "runs when the owner's dashboard loads" to a proper background job. Also needs Blaze.
-4. **Direct photo uploads** to Storage instead of pasted URLs (listing photos, damage-claim photos, profile/staff photos).
+1. **Finish the Stripe Elements integration** in `product.js` (see §10) if real deposit holds matter to you — the Worker side is done, only the card-collection UI at booking time is left.
+2. **Server-side booking transactions** — close the double-booking race described in §4 with a Cloud Function.
+3. **A real scheduled job for the overdue-deposit rule** — moves `applyOverdueDepositRule()` from "runs when the owner's dashboard loads" to a proper background job. Needs Blaze.
+4. **Direct photo uploads** to Storage instead of pasted URLs — listing photos, pickup/return/damage-claim photos, profile/staff photos all currently take a pasted link.
 5. **Notifications** — for new messages/tickets/accepted requests/deposit claims. Real-time listeners already surface this live while someone's on the site; reaching them while they're away needs Cloud Functions + FCM or email.
 6. **Aggregate rating caching** — profiles compute the star average live from every review each time, which is honest but won't scale past a few hundred reviews per person. A Cloud Function trigger maintaining a cached `rating`/`reviewCount` on `users/{uid}` would fix that without reintroducing the "client could forge it" problem.
 7. **Ticket priority/categories**, file attachments, and staff notifications for the support desk.
-8. **Revisit auto-approved damage claims once volume grows** — right now an owner's claim is applied as submitted, no review step, per your call. Worth reconsidering if disputes/chargebacks become common — the support-ticket contest path is the safety valve for now, not a formal review queue.
+8. **Revisit auto-approved damage claims once volume grows** — right now an owner's claim is applied as submitted, no review step, per an earlier call. Worth reconsidering if disputes/chargebacks become common — the support-ticket contest path is the safety valve for now, not a formal review queue.
+9. **Clean up Firestore data when an account is deleted** — `admin-worker/`'s delete-account action removes the Firebase Auth login only; their listings, reviews, and messages stay behind. Fine for now, but worth a real answer (anonymize vs. cascade-delete) before this handles real users at scale.
+10. **Paginate the Users/Listings tabs** — both currently load in one page-sized batch; fine for a small marketplace, will need real pagination UI once either collection grows past a few hundred.
+11. **Automatic component status** — right now every component's status is set by hand from the admin panel. A more advanced version could derive it from real health checks (uptime pings, error-rate thresholds) via a scheduled Cloud Function, with manual override staying available for planned maintenance.
 
 ### Important architecture note
 
@@ -250,13 +374,17 @@ Never put Firebase **Admin SDK** credentials or a service-account JSON file in t
 
 - Homepage, search, filters, categories, product pages: working
 - Auth: email/password + Google + Apple, fluid dropdown sign-in/out
-- Listings: create/edit/hide/delete, deposit amount, working
+- Listings: create/edit/hide/delete, deposit amount, working — staff can also moderate any listing
 - Rentals: request/accept/decline/cancel/complete, Timestamp dates, conflict check, working
-- Deposits & damage claims: ledger layer working (see §9) — **no real money moves yet**, by design
-- Messaging: real-time, fixed a round ago (see §8)
+- Deposits & damage claims: ledger layer working (see §9), optional real Stripe test-mode holds available but not fully wired up (see §10) — **no real money moves by default**
+- Pickup/return condition photos: working, alongside existing damage-claim photos
+- Messaging: real-time, working, Shift+Enter for new lines
 - Star ratings & reviews: person-to-person, live-computed, working — listing cards don't show a fake rating
-- Staff support desk: tickets, live chat, staff identity, admin queue, working
+- Staff support desk: 5-stage ticket lifecycle with a visual tracker, live chat with Shift+Enter, staff identity, working — **closed tickets are locked in `firestore.rules`, not just the UI**
+- Status page: public `status.html` with live component status + incident history, fully staff-editable from `admin.html` — **new this round**
+- Staff user management: browse/search accounts, disable/enable, force sign-out, password reset email, delete — needs `admin-worker/` deployed
+- Staff audit log: working, staff-readable
 - Help Center: working, links to Support
 - Settings, Dashboard: working
-- Firestore security rules: hardened, including deposit-resolution rules — **redeploy them, this round changed rentalRequests' rules again**
-- Photo uploads to Storage, real payments, server-side booking transactions, scheduled jobs, notifications: not yet included
+- Firestore security rules: hardened, including the ticket lifecycle rewrite and new status-page collections — **redeploy them, this round changed the rules again**
+- Photo uploads to Storage (still URL-based everywhere), real payments end-to-end, server-side booking transactions, scheduled jobs, notifications, Firestore cleanup on account deletion: not yet included
