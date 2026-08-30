@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Contact | Rentora Corp.</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="../img/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="../img/favicon-512.png">
+  <link rel="apple-touch-icon" href="../img/apple-touch-icon.png">
+  <link rel="stylesheet" href="../css/styles.css">
+</head>
+<body>
+<header class="site-header">
+  <a class="logo" href="index.html">rentora<span>.</span><span class="corp-badge">Corp</span></a>
+  <nav class="main-nav">
+    <a href="index.html">Home</a>
+    <a href="about.html">About</a>
+    <a href="careers.html">Careers</a>
+    <a href="press.html">Press</a>
+    <a href="contact.html" class="active">Contact</a>
+  </nav>
+  <div class="header-actions">
+    <a href="../index.html" class="primary-button">Go to Rentora →</a>
+  </div>
+</header>
+
+<main class="page-shell">
+  <section class="about-hero">
+    <p class="eyebrow">Contact</p>
+    <h1>Get in touch</h1>
+    <p>This is for questions about Rentora Corp. as a company — partnerships, press, careers, or anything else. Looking for help with your account or a rental? Use the <a href="../help.html" class="text-link">Help Center</a> instead.</p>
+  </section>
+
+  <div class="contact-layout">
+    <div class="contact-info">
+      <h3>General inquiries</h3>
+      <p><a href="mailto:hello@rentoracorp.example">hello@rentoracorp.example</a></p>
+
+      <h3>Press &amp; media</h3>
+      <p><a href="mailto:press@rentoracorp.example">press@rentoracorp.example</a></p>
+
+      <h3>Careers</h3>
+      <p><a href="mailto:careers@rentoracorp.example">careers@rentoracorp.example</a></p>
+
+      <h3>Mailing address</h3>
+      <p>Rentora Corp.<br>100 Main Street<br>East Greenwich, RI 02818</p>
+    </div>
+
+    <div>
+      <form class="corp-form" id="contactForm">
+        <label>Name<input id="contactName" type="text" maxlength="100" required></label>
+        <label>Email<input id="contactEmail" type="email" maxlength="200" required></label>
+        <label>Subject<input id="contactSubject" type="text" maxlength="150" placeholder="What's this about?"></label>
+        <label>Message<textarea id="contactMessage" rows="6" maxlength="3000" required placeholder="How can we help?"></textarea></label>
+        <button class="primary-button full" type="submit" id="contactSubmit">Send message</button>
+      </form>
+      <p id="contactSuccess" class="auth-success hidden"></p>
+      <p id="contactError" class="auth-error hidden"></p>
+    </div>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div><a class="logo" href="index.html">rentora<span>.</span></a><p>Rentora Corp.</p></div>
+  <div class="footer-links"><a href="index.html">Home</a><a href="about.html">About</a><a href="careers.html">Careers</a><a href="press.html">Press</a><a href="contact.html">Contact</a><a href="../index.html">Rentora App</a></div>
+  <small>© 2026 Rentora Corp. All rights reserved.</small>
+</footer>
+
+<script type="module">
+  import { submitCorporateInquiry } from "../js/corporate-contact.js";
+
+  const form = document.getElementById("contactForm");
+  const successEl = document.getElementById("contactSuccess");
+  const errorEl = document.getElementById("contactError");
+  const submitBtn = document.getElementById("contactSubmit");
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    successEl.classList.add("hidden");
+    errorEl.classList.add("hidden");
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Sending…";
+
+    try {
+      await submitCorporateInquiry({
+        name: document.getElementById("contactName").value,
+        email: document.getElementById("contactEmail").value,
+        subject: document.getElementById("contactSubject").value,
+        message: document.getElementById("contactMessage").value
+      });
+      form.reset();
+      successEl.textContent = "Thanks — we'll get back to you soon.";
+      successEl.classList.remove("hidden");
+    } catch (err) {
+      console.error(err);
+      errorEl.textContent = "Couldn't send that. Try again, or email us directly.";
+      errorEl.classList.remove("hidden");
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Send message";
+    }
+  });
+</script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 import { auth, db } from "./firebase.js";
 import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
-import { collection, doc, getDoc, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+import { collection, doc, getDoc, addDoc, query, orderBy, getDocs, deleteDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import {
   isStaffUser, fetchStaffProfile, saveStaffProfile,
   subscribeAllTickets, subscribeTicketMessages, sendTicketMessage,
@@ -121,6 +121,7 @@ function renderShell() {
       <button class="tab-btn" data-section="users">👥 Users</button>
       <button class="tab-btn" data-section="listings">🏷️ Listings</button>
       <button class="tab-btn" data-section="status">🟢 Status Page</button>
+      <button class="tab-btn" data-section="inquiries">✉️ Inquiries</button>
     </div>
 
     <div id="sectionBody" style="margin-top:24px"></div>
@@ -149,7 +150,8 @@ function renderSection() {
     renderUsersSection(body, search);
   }
   else if (activeSection === "listings") renderListingsSection(body);
-  else renderStatusSection(body);
+  else if (activeSection === "status") renderStatusSection(body);
+  else renderInquiriesSection(body);
 }
 
 // ================= Tickets =================
@@ -755,6 +757,53 @@ function openIncidentUpdateDialog(incident) {
       errorBox.classList.remove("hidden");
     }
   });
+}
+
+// ================= Inquiries (corporate contact form) =================
+
+async function renderInquiriesSection(body) {
+  body.innerHTML = `
+    <p class="muted" style="margin-bottom:20px">Submissions from the corporate site's contact form (<code>corporate/contact.html</code>) — the one place in Rentora that accepts a write with no sign-in, so treat this list with that in mind.</p>
+    <div id="inquiryList"><p class="state-message">Loading…</p></div>
+  `;
+
+  const listEl = document.getElementById("inquiryList");
+  try {
+    const snap = await getDocs(query(collection(db, "corporateInquiries"), orderBy("createdAt", "desc")));
+    const inquiries = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (!inquiries.length) {
+      listEl.innerHTML = `<p class="state-message">No inquiries yet.</p>`;
+      return;
+    }
+    listEl.innerHTML = inquiries.map(inquiryRow).join("");
+    inquiries.forEach(inq => {
+      document.getElementById(`delete-inquiry-${inq.id}`)?.addEventListener("click", async (e) => {
+        if (!confirm("Delete this inquiry? This can't be undone.")) return;
+        e.target.disabled = true;
+        try {
+          await deleteDoc(doc(db, "corporateInquiries", inq.id));
+          document.getElementById(`inquiry-row-${inq.id}`)?.remove();
+        } catch (err) { console.error(err); e.target.disabled = false; }
+      });
+    });
+  } catch (err) {
+    console.error(err);
+    listEl.innerHTML = `<p class="state-message">Couldn't load inquiries.</p>`;
+  }
+}
+
+function inquiryRow(inq) {
+  return `<div class="manage-row" style="flex-wrap:wrap" id="inquiry-row-${inq.id}">
+    <div class="manage-info">
+      <h3>${escapeHtml(inq.subject || "(no subject)")}</h3>
+      <div class="manage-meta">${escapeHtml(inq.name)} · <a href="mailto:${escapeHtml(inq.email)}">${escapeHtml(inq.email)}</a> · ${fmtDate(inq.createdAt)}</div>
+      <p style="margin:10px 0 0;font-size:13px;color:#555;line-height:1.6;max-width:560px">${escapeHtml(inq.message)}</p>
+    </div>
+    <div class="manage-actions">
+      <a class="chip-btn" href="mailto:${escapeHtml(inq.email)}?subject=Re: ${encodeURIComponent(inq.subject || "your message to Rentora Corp.")}">Reply</a>
+      <button class="chip-btn danger" id="delete-inquiry-${inq.id}">Delete</button>
+    </div>
+  </div>`;
 }
 
 // ================= Staff support identity dialog =================

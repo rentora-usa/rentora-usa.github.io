@@ -6,6 +6,34 @@ Rentora is a peer-to-peer rental marketplace running on a live Firebase backend:
 
 ---
 
+## 14. This round: a corporate website
+
+Real companies usually run two separate sites — the product, and a corporate site for the company behind it. Rentora now has both.
+
+### corporate/ — Rentora Corp.
+
+A separate set of pages (`corporate/index.html`, `about.html`, `careers.html`, `press.html`, `contact.html`), visually consistent with the main site but written in a more formal voice — mission, values, a leadership section, open roles, and a newsroom. Cross-linked both ways: every corporate page has a "Go to Rentora →" button back to the product, and the main app's footer now has a "Company" link into `corporate/index.html`.
+
+A few honesty notes on the content itself:
+- **No fabricated metrics or press coverage.** I didn't invent user counts, revenue figures, or fake quotes attributed to real publications — the Press page's "In the news" section is genuinely empty with an honest placeholder, not filled with made-up coverage.
+- **Leadership names and job listings are example content** — invented for a fictional company, not real people. Swap them for your actual team and openings before this goes anywhere real.
+- **Contact emails are placeholders** (`@rentoracorp.example`) since there's no real domain configured anywhere in this project yet. Replace with real addresses once you have one.
+
+### The contact form is real, not decorative
+
+`corporate/contact.html` writes to a new `corporateInquiries` Firestore collection — actual submissions, not a fake "message sent" that goes nowhere. This required something new: **it's the only collection in the entire project that allows a write with no sign-in at all.** That's deliberate — a company contact form has to work for a journalist or job applicant who doesn't have (and shouldn't need) a Rentora account — but it's also the one place in this app that's reachable by bots/spam scripts with zero friction, since there's no Firebase App Check or CAPTCHA configured. Worth adding before this handles real public traffic.
+
+Submissions are staff-only readable, visible from a new **Inquiries** tab in `admin.html` — sender, subject, message, a one-click "Reply" (mailto), and delete for spam/handled ones.
+
+### Data model addition
+
+```text
+corporateInquiries/{id}   name, email, subject, message, createdAt
+                          — public create (no auth), staff-only read/delete
+```
+
+---
+
 ## 13. This round: more account settings, and richer ticket context for staff
 
 ### Self-service account settings
@@ -296,6 +324,8 @@ statusIncidents/{id}         title, impact (minor|major|critical),
                           status (investigating|identified|monitoring|resolved),
                           updates[{status, message, createdAt}], createdAt, updatedAt,
                           resolvedAt — public read, staff write, see §12
+corporateInquiries/{id}      name, email, subject, message, createdAt
+                          — public create (no auth), staff-only read/delete, see §14
 ```
 
 ### Renting: fluid and secured, with one honest gap
@@ -361,10 +391,12 @@ js/
 
 payments-worker/    Optional Cloudflare Worker for real Stripe test-mode deposit holds — see §10
 admin-worker/       Cloudflare Worker for staff user-account management — see §11
+corporate/          Rentora Corp. corporate site — see §14
 
 Pages: index.html, about.html, search.html, product.html, login.html,
        create-listing.html, settings.html, dashboard.html, messages.html,
        profile.html, help.html, support.html, admin.html, status.html, 404.html
+Corporate pages: corporate/index.html, about.html, careers.html, press.html, contact.html
 ```
 
 ---
@@ -405,5 +437,6 @@ Never put Firebase **Admin SDK** credentials or a service-account JSON file in t
 - Staff audit log: working, staff-readable
 - Help Center: working, links to Support
 - Settings, Dashboard: working
-- Firestore security rules: hardened, including the ticket lifecycle rewrite and new status-page collections — **redeploy them, this round changed the rules again**
-- Photo uploads to Storage (still URL-based everywhere), real payments end-to-end, server-side booking transactions, scheduled jobs, notifications, Firestore cleanup on account deletion: not yet included
+- Firestore security rules: hardened, including the ticket lifecycle rewrite, status-page collections, and the new (intentionally public) corporate-inquiries write path — **redeploy them, this round changed the rules again**
+- Corporate site (`corporate/`): Home, About, Careers, Press, Contact — working, cross-linked with the main app, contact form writes real submissions viewable in `admin.html`'s new Inquiries tab — **new this round**
+- Photo uploads to Storage (still URL-based everywhere), real payments end-to-end, server-side booking transactions, scheduled jobs, notifications, Firestore cleanup on account deletion, spam protection on the public contact form: not yet included

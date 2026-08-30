@@ -385,5 +385,31 @@ service cloud.firestore {
                     && request.resource.data.updates is list;
       allow delete: if isStaff();
     }
+
+    // ---------- corporateInquiries/{id} ----------
+    // The corporate site's contact form (corporate/contact.html). This is
+    // the ONLY collection in the whole project that allows a write with no
+    // sign-in at all — deliberately, since a company contact form has to
+    // work for press/partners/job applicants who don't have (and shouldn't
+    // need) a Rentora account. That openness is also the tradeoff: with no
+    // auth and no App Check configured, this is reachable by bots/spam
+    // scripts, not just real people filling out the form. Worth adding
+    // Firebase App Check here before this handles real inbound volume.
+    match /corporateInquiries/{inquiryId} {
+      allow read: if isStaff();
+      allow create: if request.resource.data.name is string
+                    && request.resource.data.name.size() > 0
+                    && request.resource.data.name.size() <= 100
+                    && request.resource.data.email is string
+                    && request.resource.data.email.size() > 0
+                    && request.resource.data.email.size() <= 200
+                    && request.resource.data.subject is string
+                    && request.resource.data.subject.size() <= 150
+                    && request.resource.data.message is string
+                    && request.resource.data.message.size() > 0
+                    && request.resource.data.message.size() <= 3000;
+      allow update: if false;
+      allow delete: if isStaff();
+    }
   }
 }
