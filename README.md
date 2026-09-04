@@ -350,9 +350,37 @@ Treat this as a strong starting point, not a final audit.
 
 ---
 
-## 5. Firebase Storage (optional next step)
+## 5. Photo uploads — Cloudinary, not Firebase Storage
 
-Photos are pasted URLs for now (`create-listing.html`, and it'd be natural to add a profile-photo uploader to `settings.html` and `admin.js`'s staff-identity editor too). To move to direct uploads: Storage → Get started, same region as Firestore, store at `listings/{listingId}/{imageId}.jpg` / `users/{uid}/profile.jpg`, and restrict write rules to the relevant owner.
+**Listing photos upload for real** (`create-listing.html` → `js/cloudinary-upload.js`), but deliberately **not through Firebase Storage.** As of late 2024, Google requires the paid Blaze plan just to provision a Storage bucket at all — even for usage that would stay entirely within the free tier. This project intentionally stays on Firebase's free Spark plan, so photo uploads are routed through **Cloudinary** instead, which has a genuinely free tier (25GB storage/bandwidth a month) and is built specifically for uploading straight from browser JavaScript with no backend server involved.
+
+### Setup
+
+1. Create a free account at [cloudinary.com](https://cloudinary.com).
+2. Your **Cloud Name** is shown on the dashboard, top left, right under your account name.
+3. Go to **Settings → Upload → Upload presets → Add upload preset**. Set **Signing Mode to "Unsigned"** — this is what allows the browser to upload directly without a backend holding a secret key. Give it a name (or use the auto-generated one) and save.
+4. Paste both values into `js/cloudinary-config.js`:
+   ```js
+   export const CLOUDINARY_CLOUD_NAME = "your-cloud-name";
+   export const CLOUDINARY_UPLOAD_PRESET = "your-preset-name";
+   ```
+5. Redeploy the site. That's it — no Firebase changes needed at all, since this never touches Firebase.
+
+Until those two values are filled in, the upload button gives a clear "photo uploads aren't configured yet" error instead of failing silently — pasting a photo URL still works either way, since that field never depended on either service.
+
+### How it works
+
+- Files upload directly to Cloudinary via `fetch()` with `FormData` — no SDK, no backend, no secret key anywhere in the frontend (the "unsigned" preset is exactly what makes that safe).
+- The resulting HTTPS image URLs get added to the listing's `imageUrls[]` array — nothing else about how listings store photos changed, so this is purely additive on top of the existing pasted-URL field.
+- You can still paste photo URLs too (useful for stock/external images) — uploaded files and pasted URLs both end up in the same array.
+- Editing a listing shows existing photos as thumbnails; anything newly uploaded gets appended rather than replacing them.
+
+### Not built yet
+
+- **Profile/staff photos are still pasted URLs** — `settings.html` and `admin.js`'s staff-identity editor would need the same treatment (`cloudinary-upload.js` could be reused as-is for both).
+- **No image compression or resizing** — a phone photo straight out of the camera can be several MB; there's no client-side compression before upload, so large photos take a bit longer and use more of your free-tier bandwidth than they need to. Cloudinary can do this server-side via upload preset transformations if you want to set that up later.
+- **No deletion cleanup** — deleting a listing or removing a photo from the form doesn't delete the underlying file from Cloudinary. Harmless at free-tier scale, worth revisiting if this ever approaches the 25GB limit.
+- **Unsigned presets are, by design, usable by anyone who has the cloud name and preset name** — both of which are visible in this project's public frontend code. That's the intended tradeoff for a backend-free upload flow, not a bug, but it does mean someone could theoretically upload unrelated files to your Cloudinary account using those same values. Cloudinary's preset settings let you cap file size/type and add moderation if that risk matters more once this is live.
 
 ---
 
@@ -375,6 +403,8 @@ js/
   payments-config.js            PAYMENTS_WORKER_URL / STRIPE_PUBLISHABLE_KEY (optional)
   admin-users.js                Client for admin-worker/ — user account management
   admin-config.js               ADMIN_WORKER_URL
+  cloudinary-upload.js            Cloudinary photo uploads for listings (not Firebase Storage — see §5)
+  cloudinary-config.js             CLOUDINARY_CLOUD_NAME / CLOUDINARY_UPLOAD_PRESET
   help-content.js                Help Center article/category data
   app.js                   Homepage: featured listings
   search.js                 Search/browse page
@@ -438,5 +468,6 @@ Never put Firebase **Admin SDK** credentials or a service-account JSON file in t
 - Help Center: working, links to Support
 - Settings, Dashboard: working
 - Firestore security rules: hardened, including the ticket lifecycle rewrite, status-page collections, and the new (intentionally public) corporate-inquiries write path — **redeploy them, this round changed the rules again**
-- Corporate site (`corporate/`): Home, About, Careers, Press, Contact — working, cross-linked with the main app, contact form writes real submissions viewable in `admin.html`'s new Inquiries tab — **new this round**
-- Photo uploads to Storage (still URL-based everywhere), real payments end-to-end, server-side booking transactions, scheduled jobs, notifications, Firestore cleanup on account deletion, spam protection on the public contact form: not yet included
+- Corporate site (`corporate/`): Home, About, Careers, Press, Contact — working, cross-linked with the main app, contact form writes real submissions viewable in `admin.html`'s new Inquiries tab
+- Listing photo uploads: working, real uploads via Cloudinary (10MB/file cap) — deliberately not Firebase Storage, which now requires the paid Blaze plan even at free-tier usage — see §5
+- Profile/staff photo uploads (still pasted URLs), image compression, Cloudinary cleanup on delete, real payments end-to-end, server-side booking transactions, scheduled jobs, notifications, Firestore cleanup on account deletion, spam protection on the public contact form: not yet included

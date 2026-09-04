@@ -27,11 +27,14 @@
       <label>Price per day (USD)<input id="price" type="number" min="1" step="1" required></label>
       <label>Security deposit (USD, optional)<input id="depositAmount" type="number" min="0" step="1" placeholder="0"></label>
       <label>Location<input id="location" type="text" required placeholder="East Greenwich, RI"></label>
-      <label>Photo URLs (comma-separated)<input id="imageUrls" type="text" placeholder="https://example.com/photo.jpg"></label>
+      <label>Photos<input id="photoFiles" type="file" accept="image/*" multiple></label>
+      <div id="photoPreview" class="photo-preview-grid"></div>
+      <p id="uploadStatus" class="demo-note hidden"></p>
+      <label>Or paste additional photo URLs (comma-separated, optional)<input id="imageUrls" type="text" placeholder="https://example.com/photo.jpg"></label>
       <button class="primary-button full" type="submit" id="listingSubmit">Publish listing</button>
     </form>
     <p id="listingError" class="auth-error hidden"></p>
-    <p class="demo-note">Photos are linked by URL for now. Uploading directly to Firebase Storage is a natural next step. Deposits are tracked for record-keeping only — Rentora doesn't charge or hold real payments yet.</p>
+    <p class="demo-note">Photos upload directly (up to 10MB each). Deposits are tracked for record-keeping only — Rentora doesn't charge or hold real payments yet.</p>
   </div>
 </main>
 <script type="module" src="js/firebase.js"></script>
